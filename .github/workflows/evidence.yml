@@ -1,44 +1,24 @@
-# Every 30 min: collect evidence (Traffy, Bluesky, news, ThaiWater), then deploy the static site to Vercel
-# together with the latest model output restored from the Actions cache.
+# Every 30 min: collect evidence (Traffy, Bluesky, news, ThaiWater), publish it with the latest model output
+# as release asset live/live.tar.gz and trigger a Vercel rebuild (Deploy Hook).
 name: evidence
 on:
   schedule: [{cron: '*/30 * * * *'}]
   workflow_dispatch:
-concurrency: {group: evidence, cancel-in-progress: false}
-permissions: {contents: read}
+concurrency: {group: live-data, cancel-in-progress: false}
+permissions: {contents: write}
 jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env: {GH_TOKEN: '${{ github.token }}'}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: {node-version: 22}
-      - name: Prepared data (release asset)
-        run: gh release download data-v1 -p prepared-data.tar.gz -O - | tar xz
-        env: {GH_TOKEN: '${{ github.token }}'}
-      - uses: actions/cache/restore@v4
-        with: {path: public/live/model, key: model-none, restore-keys: model-}
-      - uses: actions/cache/restore@v4
-        with:
-          path: |
-            public/live/evidence.json
-            public/live/waterlevels.json
-            data/evidence
-          key: evidence-none
-          restore-keys: evidence-
+      - name: Prepared data (gazetteer, named places)
+        run: gh release download data-v1 -p prepared-data.tar.gz -O - | tar xz data
+      - name: Previous live data
+        run: gh release download live -p live.tar.gz -O - | tar xz || echo "no live release yet"
       - run: node jobs.mjs evidence
-      - uses: actions/cache/save@v4
-        with:
-          path: |
-            public/live/evidence.json
-            public/live/waterlevels.json
-            data/evidence
-          key: evidence-${{ github.run_id }}
-      - run: node scripts/build-vercel.mjs
-      - name: Deploy
-        run: npx --yes vercel@latest deploy --prebuilt --prod --token "$VERCEL_TOKEN"
-        env:
-          VERCEL_TOKEN: '${{ secrets.VERCEL_TOKEN }}'
-          VERCEL_ORG_ID: '${{ secrets.VERCEL_ORG_ID }}'
-          VERCEL_PROJECT_ID: '${{ secrets.VERCEL_PROJECT_ID }}'
+      - run: scripts/publish-live.sh
+        env: {VERCEL_DEPLOY_HOOK: '${{ secrets.VERCEL_DEPLOY_HOOK }}'}

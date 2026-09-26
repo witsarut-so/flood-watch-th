@@ -38,9 +38,11 @@ npm test && npm run check
 - **สถานที่ในข้อความ** ([evidence-text.mjs](evidence-text.mjs), [named-match.mjs](named-match.mjs)): จังหวัด/อำเภอ/ตำบลจาก gazetteer OSM • ถนน ซอย หมู่บ้าน คลอง สะพาน แยก จาก OSM (`data/named`) จับคู่เมื่อบริบทชัด (พิกัดของรายงาน จังหวัด/อำเภอที่ระบุ หรือชื่อไม่ซ้ำ) ถนนยาวตัดเฉพาะช่วงใกล้พื้นที่ ชื่อที่ซ้ำหลายพื้นที่แสดงในรายการแต่ไม่วาด • ความลึก (ตัวเลข หรือ "ระดับเข่า" = ประมาณ) • ตัวเลขสำคัญ
 
 ## Deploy (Vercel + GitHub Actions)
-1. สร้าง release asset ข้อมูลที่เตรียมไว้: `tar czf prepared-data.tar.gz data/domains data/boundary data/gazetteer data/named public/data && gh release create data-v1 prepared-data.tar.gz`
-2. ตั้ง GitHub secrets: `VERCEL_TOKEN` (สร้างที่ vercel.com/account/tokens), `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` (จาก `.vercel/project.json` หลัง `vercel link`)
-3. Workflow จะ deploy แบบ prebuilt (`node scripts/build-vercel.mjs && vercel deploy --prebuilt --prod`) รวม ~60 ครั้ง/วัน (โควตา Hobby 100/วัน)
+Vercel ผูกกับ repo นี้ (Git integration) และ build ด้วย [scripts/vercel-build.mjs](scripts/vercel-build.mjs) ตาม [vercel.json](vercel.json): ดาวน์โหลดข้อมูลที่ไม่ได้อยู่ใน git จาก GitHub Releases แล้วเสิร์ฟ `public/`
+- release `data-v1` / `prepared-data.tar.gz`: ข้อมูลเตรียมไว้ (`data/…`, `public/data/…`) สร้างใหม่ด้วย `npm run prepare-data` แล้ว `tar czf prepared-data.tar.gz data/domains data/boundary data/gazetteer data/named public/data`
+- release `live` / `live.tar.gz`: ผลหลักฐานและแบบจำลองล่าสุด GitHub Actions อัปโหลดทับทุกรอบ ([scripts/publish-live.sh](scripts/publish-live.sh)) แล้วเรียก Vercel Deploy Hook
+
+ตั้งค่าครั้งเดียว: สร้าง Deploy Hook ใน Vercel (Project → Settings → Git → Deploy Hooks, branch `main`) แล้วเก็บเป็น secret `VERCEL_DEPLOY_HOOK` ของ repo ไม่ต้องใช้ Vercel token รวมประมาณ 60 builds/วัน
 
 ก่อนเปิดใช้งานมาก ๆ: เปลี่ยน tile แผนที่ฐานใน [public/app.js](public/app.js) (tile.openstreetmap.org ห้ามใช้กับเว็บผู้ใช้มาก [นโยบาย](https://operations.osmfoundation.org/policies/tiles/)) และตรวจเงื่อนไขการเผยแพร่ข้อมูล Traffy Fondue, ThaiWater, Google News
 

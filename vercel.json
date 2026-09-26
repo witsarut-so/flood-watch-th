@@ -1,0 +1,17 @@
+{
+ "$schema": "https://openapi.vercel.sh/vercel.json",
+ "framework": null,
+ "installCommand": "true",
+ "buildCommand": "node scripts/vercel-build.mjs",
+ "outputDirectory": "public",
+ "headers": [
+  {"source": "/(.*)", "headers": [
+   {"key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://unpkg.com https://tile.openstreetmap.org https://storage.googleapis.com https://cdn.bsky.app; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"},
+   {"key": "X-Content-Type-Options", "value": "nosniff"},
+   {"key": "Referrer-Policy", "value": "strict-origin-when-cross-origin"},
+   {"key": "Permissions-Policy", "value": "geolocation=(self), camera=(), microphone=()"}]},
+  {"source": "/data/(.*)", "headers": [{"key": "Cache-Control", "value": "public, max-age=3600"}]},
+  {"source": "/live/(.*)", "headers": [{"key": "Cache-Control", "value": "public, max-age=0, must-revalidate"}]},
+  {"source": "/live/model/:run/:file", "headers": [{"key": "Cache-Control", "value": "public, max-age=86400, immutable"}]}
+ ]
+}
