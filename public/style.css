@@ -56,3 +56,14 @@ footer{max-width:1600px;margin:0 auto;padding:0 max(16px,3%) 28px;font-size:11px
 .ev-tag{display:inline-block;font-size:10px;padding:1px 7px;border-radius:9px;margin-right:6px;background:#fce4ec;color:#a61e4d;vertical-align:1px}.ev-tag.social{background:#e9ecef;color:#343a40}
 .pixelated{image-rendering:pixelated}
 .model-table{min-width:420px;margin-bottom:8px}
+/* Animated droplet logo: waves drift, eyes blink, body bobs; still when the viewer prefers reduced motion */
+.brand .logo{width:40px;height:40px;flex:none;overflow:visible}
+.logo-bob{animation:logo-bob 3s ease-in-out infinite;transform-origin:32px 60px}
+.logo-wave1{animation:logo-wave 2.4s linear infinite}.logo-wave2{animation:logo-wave 3.1s linear infinite reverse}
+.logo-eyes ellipse{transform-box:fill-box;transform-origin:center;animation:logo-blink 4s infinite}
+.brand:hover .logo-bob{animation-duration:1.2s}
+@keyframes logo-bob{0%,100%{transform:translateY(0) scale(1,1)}50%{transform:translateY(-2.5px) scale(.98,1.02)}}
+@keyframes logo-wave{from{transform:translateX(0)}to{transform:translateX(32px)}}
+@keyframes logo-blink{0%,90%,100%{transform:scaleY(1)}95%{transform:scaleY(.12)}}
+@media (prefers-reduced-motion:reduce){.logo-bob,.logo-wave1,.logo-wave2,.logo-eyes ellipse{animation:none}}
+@media(max-width:760px){.brand .logo{width:32px;height:32px}}

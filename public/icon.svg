@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+ <title>Flood Watch</title>
+ <defs>
+  <linearGradient id="body" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#74c0fc"/><stop offset="1" stop-color="#1971c2"/></linearGradient>
+  <clipPath id="drop"><path d="M32 3C32 3 11 27 11 40a21 21 0 0 0 42 0C53 27 32 3 32 3Z"/></clipPath>
+ </defs>
+ <path d="M32 3C32 3 11 27 11 40a21 21 0 0 0 42 0C53 27 32 3 32 3Z" fill="url(#body)"/>
+ <g clip-path="url(#drop)">
+  <path fill="#a5d8ff" opacity=".55" d="M-32 44q8-5 16 0t16 0 16 0 16 0 16 0 16 0 16 0V70H-32Z">
+   <animateTransform attributeName="transform" type="translate" from="0 0" to="32 0" dur="2.4s" repeatCount="indefinite"/>
+  </path>
+  <path fill="#d0ebff" opacity=".5" d="M-32 50q8-4 16 0t16 0 16 0 16 0 16 0 16 0 16 0V70H-32Z">
+   <animateTransform attributeName="transform" type="translate" from="32 0" to="0 0" dur="3.1s" repeatCount="indefinite"/>
+  </path>
+ </g>
+ <ellipse cx="23" cy="27" rx="4" ry="6.5" fill="#fff" opacity=".55" transform="rotate(28 23 27)"/>
+ <g fill="#0b3a66">
+  <ellipse cx="25" cy="38" rx="2.6" ry="3.4"><animate attributeName="ry" values="3.4;3.4;.4;3.4" keyTimes="0;.9;.95;1" dur="4s" repeatCount="indefinite"/></ellipse>
+  <ellipse cx="39" cy="38" rx="2.6" ry="3.4"><animate attributeName="ry" values="3.4;3.4;.4;3.4" keyTimes="0;.9;.95;1" dur="4s" repeatCount="indefinite"/></ellipse>
+ </g>
+ <circle cx="25.8" cy="36.8" r=".9" fill="#fff"/><circle cx="39.8" cy="36.8" r=".9" fill="#fff"/>
+ <circle cx="20" cy="44" r="2.4" fill="#ff8fab" opacity=".7"/><circle cx="44" cy="44" r="2.4" fill="#ff8fab" opacity=".7"/>
+ <path d="M28 45q4 3.5 8 0" fill="none" stroke="#0b3a66" stroke-width="1.8" stroke-linecap="round"/>
+</svg>
