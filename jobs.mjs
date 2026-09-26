@@ -1,13 +1,14 @@
 // Jobs shared by the local server and GitHub Actions. Outputs are static files under public/live/:
 //   evidence.json, waterlevels.json            (runEvidenceJob)
 //   model/latest.json, model/<runId>/*.bin.gz  (runModelJob)
-// CLI: node jobs.mjs evidence | model [--force]
+// CLI: node jobs.mjs evidence | model [--force] | thai [--no-upload]
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {mkdir,readFile,writeFile,readdir,rm,rename} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {modelInputs} from './model-inputs.mjs';
-import {getEvidence} from './evidence.mjs';
+import {getEvidence,bmaFloodAlert,traffyDirect,textContext} from './evidence.mjs';
+import {gzipSync,gunzipSync} from 'node:zlib';
 import {getWater} from './live-water.mjs';
 
 const run=promisify(execFile),root=fileURLToPath(new URL('.',import.meta.url));
@@ -22,6 +23,22 @@ export async function runEvidenceJob(){
  await writeAtomic(LIVE+'evidence.json',JSON.stringify(clean));
  try{const w=await getWater();await writeAtomic(LIVE+'waterlevels.json',JSON.stringify(w));}catch(e){console.error('[waterlevels]',e.message);}
  return {fetchedAt:ev.fetchedAt,items:ev.items.length,errors:ev.errors.map(e=>e.source)};
+}
+
+// Thai relay (run on a machine in Thailand, e.g. by launchd every 30 min): fetch the sources that only answer from
+// Thai networks and upload data/evidence/thai.json.gz to release "live". A source that fails this round keeps its
+// previous successful part, so one bad pull never blanks the map.
+const RELAY_REPO=process.env.RELAY_REPO||'witsarut-so/flood-watch-th',RELAY_GH_USER=process.env.RELAY_GH_USER||'witsarut-so';
+export async function runThaiJob({upload=true}={}){
+ const {gaz,idx}=await textContext(),file=root+'data/evidence/thai.json.gz',now=new Date().toISOString();
+ let prev={};try{prev=JSON.parse(gunzipSync(await readFile(file)));}catch{}
+ const out={fetchedAt:now,bma:prev.bma||null,traffy:prev.traffy||null},errors=[],report={};
+ try{const items=await bmaFloodAlert(gaz,idx);if(!items.length)throw Error('no items');out.bma={ok:true,fetchedAt:now,items};report.bma=items.length;}catch(e){report.bma='failed: '+e.message;}
+ try{const items=await traffyDirect(errors,idx);if(!items.length||items[0].stale)throw Error(errors.at(-1)?.error||'no fresh items');out.traffy={ok:true,fetchedAt:now,items};report.traffy=items.length;}catch(e){report.traffy='failed: '+String(e.message).slice(0,120);}
+ await mkdir(root+'data/evidence',{recursive:true});await writeFile(file,gzipSync(JSON.stringify(out)));
+ if(upload){const token=(await run('gh',['auth','token','-u',RELAY_GH_USER])).stdout.trim();
+  await run('gh',['release','upload','live',file,'--clobber','-R',RELAY_REPO],{env:{...process.env,GH_TOKEN:token}});report.uploaded=true;}
+ return {fetchedAt:now,...report};
 }
 
 let running=null;
@@ -51,6 +68,6 @@ export async function runModelJob({force=false,ifOlderThanMinutes=0}={}){
 
 if(process.argv[1]===fileURLToPath(import.meta.url)){
  const [job,flag]=process.argv.slice(2);
- const task=job==='evidence'?runEvidenceJob():job==='model'?runModelJob({force:flag==='--force'}):Promise.reject(Error('usage: node jobs.mjs evidence|model [--force]'));
+ const task=job==='evidence'?runEvidenceJob():job==='thai'?runThaiJob({upload:flag!=='--no-upload'}):job==='model'?runModelJob({force:flag==='--force'}):Promise.reject(Error('usage: node jobs.mjs evidence | model [--force] | thai [--no-upload]'));
  task.then(r=>{console.log(JSON.stringify(r));process.exit(0);}).catch(e=>{console.error(e.stderr||e.message);process.exit(1);});
 }

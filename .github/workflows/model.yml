@@ -21,6 +21,8 @@ jobs:
         run: gh release download data-v1 -p prepared-data.tar.gz -O - | tar xz data
       - name: Previous live data (evidence for validation)
         run: gh release download live -p live.tar.gz -O - | tar xz || echo "no live release yet"
+      - name: Thai relay data (sources reachable only from Thailand)
+        run: gh release download live -p thai.json.gz -D data/evidence --clobber || echo "no relay data yet"
       - uses: actions/cache/restore@v4
         with: {path: numba-cache, key: 'numba-${{ hashFiles(''model/solver.py'') }}', restore-keys: 'numba-${{ hashFiles(''model/solver.py'') }}-'}
       - run: node jobs.mjs model --force

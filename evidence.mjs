@@ -30,7 +30,13 @@ const bkkTime=s=>s?new Date(s.replace(' ','T')+'+07:00').toISOString():null;
 
 // Traffy's public API is slow under load: small pages, one retry-free pass, and the last good pull is reused (with its age) on failure.
 const TRAFFY_CACHE=new URL('./data/evidence/traffy-last-good.json',import.meta.url);
-async function traffy(errors,idx){
+// Thai relay: some sources answer only from Thai networks. A machine in Thailand runs `node jobs.mjs thai` and uploads
+// thai.json.gz (release "live"); Actions download it here. Fresh relay data (< RELAY_FRESH_MIN) is used directly.
+const RELAY=new URL('./data/evidence/thai.json.gz',import.meta.url),RELAY_FRESH_MIN=60;
+async function relayPart(name){try{const r=JSON.parse(gunzipSync(await readFile(RELAY)));const part=r[name];if(part?.ok&&part.items?.length)return {...part,relayAt:r.fetchedAt,host:r.host};}catch{}return null;}
+const minutesSince=t=>(Date.now()-Date.parse(t))/60000;
+function relayItems(part,label){const stale=minutesSince(part.fetchedAt)>RELAY_FRESH_MIN;return part.items.map(i=>({...i,via:label,...(stale?{stale:true,fetchedAt:part.fetchedAt}:{})}));}
+export async function traffyDirect(errors,idx){
  const cutoff=Date.now()-TRAFFY_HOURS*3600000,out=[];let complete=false;
  try{
   for(let page=0;page<40;page++){
@@ -46,6 +52,14 @@ async function traffy(errors,idx){
  }
  if(out.length)await writeFile(TRAFFY_CACHE,JSON.stringify({fetchedAt:new Date().toISOString(),complete,items:out}));
  return out;
+}
+
+async function traffyWithRelay(errors,idx){
+ const relay=await relayPart('traffy');if(relay&&minutesSince(relay.fetchedAt)<=RELAY_FRESH_MIN)return relayItems(relay,'เครื่องในไทย');
+ const items=await traffyDirect(errors,idx);
+ // direct pull fell back to an old cache but the relay has something newer: prefer the relay
+ if(relay&&items[0]?.stale&&Date.parse(relay.fetchedAt)>Date.parse(items[0].fetchedAt||0)){const k=errors.findLastIndex(e=>e.source==='traffy');if(k>=0)errors[k]={source:'traffy',error:`เข้าตรงไม่ได้ ใช้ข้อมูลจากเครื่องในไทยเมื่อ ${relay.fetchedAt}`};return relayItems(relay,'เครื่องในไทย');}
+ return items;
 }
 
 async function roadSensors(){
@@ -107,6 +121,7 @@ function asLines(g){if(!Array.isArray(g)||!g.length)return [];if(typeof g[0]==='
 // The BMA server only answers from Thai networks; elsewhere (GitHub runners) the last good pull is reused, with its time.
 const BMA_CACHE=new URL('./data/evidence/bma-last-good.json',import.meta.url);
 async function bmaWithFallback(g,idx,errors){
+ const relay=await relayPart('bma');if(relay&&minutesSince(relay.fetchedAt)<=RELAY_FRESH_MIN)return relayItems(relay,'เครื่องในไทย');
  try{const items=await bmaFloodAlert(g,idx);if(items.length){await mkdir(new URL('./data/evidence/',import.meta.url),{recursive:true});await writeFile(BMA_CACHE,JSON.stringify({fetchedAt:new Date().toISOString(),items}));}return items;}
  catch(e){try{const last=JSON.parse(await readFile(BMA_CACHE));errors.push({source:'bmaAlert',error:`${e.message} (เว็บ กทม. เข้าได้จากเครือข่ายในไทยเท่านั้น) • ใช้ข้อมูลที่ดึงสำเร็จล่าสุดเมื่อ ${last.fetchedAt}`});return last.items.map(i=>({...i,stale:true,fetchedAt:last.fetchedAt}));}catch{throw e;}}
 }
@@ -148,6 +163,8 @@ async function bluesky(g,idx,errors){
  return [...seen.values()];
 }
 
+// Gazetteer + named-place index for callers outside refresh() (the Thai relay job).
+export async function textContext(){gaz??=buildGazetteer(JSON.parse(await readFile(new URL('./data/gazetteer/th-admin.json',import.meta.url))).places);return {gaz,idx:await namedIndex()};}
 let named;
 async function namedIndex(){
  if(named!==undefined)return named;
@@ -207,7 +224,7 @@ function refresh(){
   gaz??=buildGazetteer(JSON.parse(await readFile(new URL('./data/gazetteer/th-admin.json',import.meta.url))).places);
   const errors=[],fetchedAt=new Date().toISOString(),idx=await namedIndex();
   if(!idx)errors.push({source:'named',error:'ยังไม่มีฐานชื่อถนน/หมู่บ้าน (รัน model/build_static.py)'});
-  const tasks={bmaAlert:()=>bmaWithFallback(gaz,idx,errors),traffy:()=>traffy(errors,idx),roadSensors,heavyRain,dams,canalFlow,canalLevels,waterGates,social:()=>bluesky(gaz,idx,errors),news:()=>news(gaz,errors,idx)};
+  const tasks={bmaAlert:()=>bmaWithFallback(gaz,idx,errors),traffy:()=>traffyWithRelay(errors,idx),roadSensors,heavyRain,dams,canalFlow,canalLevels,waterGates,social:()=>bluesky(gaz,idx,errors),news:()=>news(gaz,errors,idx)};
   const results=await Promise.allSettled(Object.values(tasks).map(f=>f()));const sources={};const items=[];
   Object.keys(tasks).forEach((name,i)=>{const r=results[i];if(r.status==='fulfilled'){items.push(...r.value);sources[name]={ok:true,count:r.value.length};}else{sources[name]={ok:false,count:0,error:r.reason.message};errors.push({source:name,error:r.reason.message});}});
   let rain=[];try{rain=await rainRate();sources.rainRate={ok:true,count:rain.length};}catch(e){sources.rainRate={ok:false,count:0,error:e.message};errors.push({source:'rainRate',error:e.message});}
