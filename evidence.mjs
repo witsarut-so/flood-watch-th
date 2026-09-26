@@ -104,6 +104,12 @@ export function jsConst(src,name){
 function thaiStamp(text){const m=text.match(/อัปเดต\s*(\d{1,2}):(\d{2})\s*น\.\s*(\d{1,2})\s*([ก-๙.]+)\s*(\d{4})/);if(!m||!TH_MONTH[m[4]])return null;const y=+m[5]-543,pad=n=>String(n).padStart(2,'0');return new Date(`${y}-${pad(TH_MONTH[m[4]])}-${pad(m[3])}T${pad(m[1])}:${m[2]}:00+07:00`).toISOString();}
 // [lat,lng] | [[lat,lng],...] | [[[lat,lng],...],...] -> list of lines
 function asLines(g){if(!Array.isArray(g)||!g.length)return [];if(typeof g[0]==='number')return [[g]];if(typeof g[0][0]==='number')return [g];return g.filter(l=>Array.isArray(l)&&Array.isArray(l[0]));}
+// The BMA server only answers from Thai networks; elsewhere (GitHub runners) the last good pull is reused, with its time.
+const BMA_CACHE=new URL('./data/evidence/bma-last-good.json',import.meta.url);
+async function bmaWithFallback(g,idx,errors){
+ try{const items=await bmaFloodAlert(g,idx);if(items.length){await mkdir(new URL('./data/evidence/',import.meta.url),{recursive:true});await writeFile(BMA_CACHE,JSON.stringify({fetchedAt:new Date().toISOString(),items}));}return items;}
+ catch(e){try{const last=JSON.parse(await readFile(BMA_CACHE));errors.push({source:'bmaAlert',error:`${e.message} (เว็บ กทม. เข้าได้จากเครือข่ายในไทยเท่านั้น) • ใช้ข้อมูลที่ดึงสำเร็จล่าสุดเมื่อ ${last.fetchedAt}`});return last.items.map(i=>({...i,stale:true,fetchedAt:last.fetchedAt}));}catch{throw e;}}
+}
 export async function bmaFloodAlert(g,idx){
  const html=await get(BMA_ALERT,'text',30000);const at=thaiStamp(html.replace(/<[^>]+>/g,' '));
  const roads=jsConst(html,'ROADS')||[],geo=jsConst(html,'GEO')||{},rep=jsConst(html,'REPORTS')||{items:[]};
@@ -201,7 +207,7 @@ function refresh(){
   gaz??=buildGazetteer(JSON.parse(await readFile(new URL('./data/gazetteer/th-admin.json',import.meta.url))).places);
   const errors=[],fetchedAt=new Date().toISOString(),idx=await namedIndex();
   if(!idx)errors.push({source:'named',error:'ยังไม่มีฐานชื่อถนน/หมู่บ้าน (รัน model/build_static.py)'});
-  const tasks={bmaAlert:()=>bmaFloodAlert(gaz,idx),traffy:()=>traffy(errors,idx),roadSensors,heavyRain,dams,canalFlow,canalLevels,waterGates,social:()=>bluesky(gaz,idx,errors),news:()=>news(gaz,errors,idx)};
+  const tasks={bmaAlert:()=>bmaWithFallback(gaz,idx,errors),traffy:()=>traffy(errors,idx),roadSensors,heavyRain,dams,canalFlow,canalLevels,waterGates,social:()=>bluesky(gaz,idx,errors),news:()=>news(gaz,errors,idx)};
   const results=await Promise.allSettled(Object.values(tasks).map(f=>f()));const sources={};const items=[];
   Object.keys(tasks).forEach((name,i)=>{const r=results[i];if(r.status==='fulfilled'){items.push(...r.value);sources[name]={ok:true,count:r.value.length};}else{sources[name]={ok:false,count:0,error:r.reason.message};errors.push({source:name,error:r.reason.message});}});
   let rain=[];try{rain=await rainRate();sources.rainRate={ok:true,count:rain.length};}catch(e){sources.rainRate={ok:false,count:0,error:e.message};errors.push({source:'rainRate',error:e.message});}
