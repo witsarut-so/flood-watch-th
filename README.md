@@ -44,6 +44,12 @@ Vercel ผูกกับ repo นี้ (Git integration) และ build ด�
 
 ตั้งค่าครั้งเดียว: สร้าง Deploy Hook ใน Vercel (Project → Settings → Git → Deploy Hooks, branch `main`) แล้วเก็บเป็น secret `VERCEL_DEPLOY_HOOK` ของ repo ไม่ต้องใช้ Vercel token รวมประมาณ 60 builds/วัน
 
+### Thai relay (แหล่งที่เข้าได้จากในไทยเท่านั้น)
+`now.bangkok.go.th` (ถนนน้ำท่วมทางการ กทม.) ไม่ตอบเซิร์ฟเวอร์ GitHub ในต่างประเทศ จึงให้เครื่องในไทยรัน `node jobs.mjs thai` (ดึง กทม. + Traffy) แล้วอัปโหลด `thai.json.gz` ขึ้น release `live` workflow ดาวน์โหลดไปใช้เมื่ออายุไม่เกิน 60 นาที ถ้าเกินจะแสดงเป็น "ข้อมูลรอบก่อน" พร้อมเวลา
+- macOS: `scripts/thai-relay.sh install` (launchd รันนาที :20 และ :50), `status`, `run`, `uninstall` • log: `~/Library/Logs/floodwatch-thai-relay.log`
+- ต้องมี `gh` ที่ล็อกอินบัญชีที่มีสิทธิ์เขียน repo (ตั้งด้วย `RELAY_GH_USER`, ค่าเริ่มต้น witsarut-so)
+- ปิดเครื่อง: ข้อมูล กทม./Traffy ค้างที่รอบล่าสุด ส่วนอื่นยังอัปเดตตามปกติ
+
 ก่อนเปิดใช้งานมาก ๆ: เปลี่ยน tile แผนที่ฐานใน [public/app.js](public/app.js) (tile.openstreetmap.org ห้ามใช้กับเว็บผู้ใช้มาก [นโยบาย](https://operations.osmfoundation.org/policies/tiles/)) และตรวจเงื่อนไขการเผยแพร่ข้อมูล Traffy Fondue, ThaiWater, Google News
 
 ## Attribution
