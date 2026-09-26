@@ -55,7 +55,10 @@ export function buildGazetteer(places){
  // prefer the district over a same-named khwaeng
  const bkkBare=places.filter(p=>p.level!==4&&p.province==='กรุงเทพฯ'&&p.short.length>=4&&!BARE_STOP.has(p.short)&&provs.get(p.short).size===1).sort((a,b)=>a.level-b.level).filter((p,i,a)=>a.findIndex(q=>q.short===p.short)===i).sort((a,b)=>b.short.length-a.short.length);
  const byProvDistricts=new Map();for(const p of places)if(p.level===6&&p.short.length>=4){if(!byProvDistricts.has(p.province))byProvDistricts.set(p.province,[]);byProvDistricts.get(p.province).push(p);}
- return {provinces,byProvince,districtsByName,subByName,provTerms,bkkBare,byProvDistricts};
+ // Outside Bangkok, long district names that exist in one province only ("อรัญประเทศ") are distinctive enough without อ.
+ const districtProvs=new Map();for(const p of places)if(p.level===6){if(!districtProvs.has(p.short))districtProvs.set(p.short,new Set());districtProvs.get(p.short).add(p.province);}
+ const uniqueDistricts=places.filter(p=>p.level===6&&p.province!=='กรุงเทพฯ'&&p.short.length>=7&&!p.short.startsWith('บ้าน')&&!p.short.startsWith('เมือง')&&districtProvs.get(p.short).size===1).sort((a,b)=>b.short.length-a.short.length);
+ return {provinces,byProvince,districtsByName,subByName,provTerms,bkkBare,byProvDistricts,uniqueDistricts};
 }
 
 // Returns places mentioned, most specific first; ambiguous district/subdistrict names need their province in the text.
@@ -63,12 +66,14 @@ export function extractPlaces(text,g){
  const found=new Map(),provHits=new Set();let rest=text;
  for(const [term,p] of g.provTerms){
   const thai=/[ก-๙]/.test(term);
-  const re=thai?(AMBIGUOUS_PROVINCE.has(term)?new RegExp(`(?:จ\\.|จังหวัด|ชาว|เมือง)\\s*${esc(term)}`,'g'):new RegExp(esc(term),'g')):new RegExp(`\\b${esc(term)}\\b`,'gi');
+  // a province name right after ถนน/ถ. is a road (ถ.เพชรบุรี in Bangkok), not the province
+  const re=thai?(AMBIGUOUS_PROVINCE.has(term)?new RegExp(`(?:จ\\.|จังหวัด|ชาว|เมือง)\\s*${esc(term)}`,'g'):new RegExp(`(?<!(?:ถนน|ถ\\.)\\s*)${esc(term)}`,'g')):new RegExp(`\\b${esc(term)}\\b`,'gi');
   if(re.test(rest)){provHits.add(p.short);rest=rest.replace(re,' ');}
  }
  const pick=(cands,level)=>{const inProv=cands.filter(c=>provHits.has(c.province));if(inProv.length)return inProv[0];if(cands.length===1)return cands[0];return null;};
  for(const m of text.matchAll(/(?:อ\.|อำเภอ|เขต)\s*([ก-๙]{2,30})/g)){for(let n=m[1].length;n>=2;n--){const c=g.districtsByName.get(m[1].slice(0,n))||g.districtsByName.get('เมือง'+m[1].slice(0,n));if(c){const p=pick(c,6);if(p)found.set('d'+p.id,{...p,precision:'district'});break;}}}
  for(const p of g.bkkBare)if(rest.includes(p.short)){const k=(p.level===6?'d':'s')+p.id;if(!found.has(k))found.set(k,{...p,precision:p.level===6?'district':'subdistrict'});provHits.add('กรุงเทพฯ');}
+ for(const p of g.uniqueDistricts||[])if(rest.includes(p.short)&&!found.has('d'+p.id)){found.set('d'+p.id,{...p,precision:'district'});provHits.add(p.province);}
  for(const name of provHits)for(const p of g.byProvDistricts.get(name)||[])if(rest.includes(p.short)&&!found.has('d'+p.id))found.set('d'+p.id,{...p,precision:'district'});
  for(const m of text.matchAll(/(?:ต\.|ตำบล|แขวง)\s*([ก-๙]{2,30})/g)){for(let n=m[1].length;n>=2;n--){const c=g.subByName.get(m[1].slice(0,n));if(c){const p=pick(c,8);if(p)found.set('s'+p.id,{...p,precision:'subdistrict'});break;}}}
  const covered=new Set([...found.values()].map(p=>p.province));
@@ -76,5 +81,9 @@ export function extractPlaces(text,g){
  const rank={subdistrict:0,district:1,province:2};
  return [...found.values()].sort((a,b)=>rank[a.precision]-rank[b.precision]).slice(0,25).map(p=>({name:p.name,short:p.short,province:p.province,lat:p.lat,lng:p.lng,precision:p.precision}));
 }
+
+// Social posts: hashtags such as #น้ำท่วมกทม are generic campaign tags, not where the post is about. Use the body first,
+// and hashtags only when the body names no place at all.
+export function extractPlacesSocial(text,g){const body=text.replace(/#\S+/g,' ');const p=extractPlaces(body,g);return p.length?p:extractPlaces(text,g);}
 
 export const titleKey=t=>t.toLowerCase().replace(/[\s"'“”‘’!?,.:;()\-–—|]/g,'').slice(0,48);

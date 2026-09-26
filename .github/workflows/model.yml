@@ -23,6 +23,8 @@ jobs:
         run: gh release download live -p live.tar.gz -O - | tar xz || echo "no live release yet"
       - name: Thai relay data (sources reachable only from Thailand)
         run: gh release download live -p thai.json.gz -D data/evidence --clobber || echo "no relay data yet"
+      - name: News outlets' social posts (flood-social-feed)
+        run: gh release download live -p social-feed.json.gz -D data/evidence --clobber || echo "no social feed yet"
       - uses: actions/cache/restore@v4
         with: {path: numba-cache, key: 'numba-${{ hashFiles(''model/solver.py'') }}', restore-keys: 'numba-${{ hashFiles(''model/solver.py'') }}-'}
       - run: node jobs.mjs model --force

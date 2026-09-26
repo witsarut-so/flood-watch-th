@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {parseRss,relevance,extractDepth,extractFacts,extractPlaces,buildGazetteer,redact,titleKey} from '../evidence-text.mjs';
+import {parseRss,relevance,extractDepth,extractFacts,extractPlaces,extractPlacesSocial,buildGazetteer,redact,titleKey} from '../evidence-text.mjs';
 const g=buildGazetteer([
  {id:1,level:4,short:'กรุงเทพฯ',en:'Bangkok',province:'กรุงเทพฯ',lat:13.75,lng:100.5,name:'กรุงเทพมหานคร'},
  {id:2,level:4,short:'นนทบุรี',en:'Nonthaburi',province:'นนทบุรี',lat:13.86,lng:100.51,name:'จังหวัดนนทบุรี'},
@@ -7,6 +7,8 @@ const g=buildGazetteer([
  {id:4,level:6,short:'ลาดกระบัง',en:'',province:'กรุงเทพฯ',lat:13.72,lng:100.78,name:'เขตลาดกระบัง'},
  {id:5,level:6,short:'บางบัวทอง',en:'',province:'นนทบุรี',lat:13.91,lng:100.42,name:'อำเภอบางบัวทอง'},
  {id:6,level:6,short:'เมือง',en:'',province:'เลย',lat:17.5,lng:101.7,name:'อำเภอเมือง'},
+ {id:8,level:4,short:'สระแก้ว',en:'Sa Kaeo',province:'สระแก้ว',lat:13.8,lng:102.07,name:'จังหวัดสระแก้ว'},
+ {id:9,level:6,short:'อรัญประเทศ',en:'',province:'สระแก้ว',lat:13.69,lng:102.5,name:'อำเภออรัญประเทศ'},
  {id:7,level:8,short:'สนามบิน',en:'',province:'กรุงเทพฯ',district:'ดอนเมือง',lat:13.9,lng:100.6,name:'แขวงสนามบิน'},
 ]);
 test('parses RSS items and strips Google publisher suffix',()=>{
@@ -36,3 +38,8 @@ test('places: prefixed district resolved by province, Bangkok aliases, ambiguous
 });
 test('redacts phone numbers and e-mails',()=>{assert.equal(redact('โทร 081-234-5678 a@b.co'),'โทร [เบอร์โทร] [อีเมล]');});
 test('title key collapses punctuation and spacing',()=>{assert.equal(titleKey('น้ำท่วม, "หนัก"!'),titleKey('น้ำท่วม หนัก'));});
+test('social posts: body places beat generic hashtags; unique long district names need no prefix',()=>{
+ const p=extractPlacesSocial('อรัญประเทศอ่วมหนัก มวลน้ำเข้าท่วม #น้ำท่วม #น้ำท่วมกทม',g);assert.equal(p[0].short,'อรัญประเทศ');assert.ok(!p.some(x=>x.short==='กรุงเทพฯ'));
+ assert.equal(extractPlacesSocial('ฝนตกหนักมาก #น้ำท่วมกทม',g)[0].short,'กรุงเทพฯ');
+});
+test('a road named after a province is not that province',()=>{assert.ok(!extractPlaces('น้ำท่วม ถ.เพชรบุรี และ ถนนนนทบุรี',buildGazetteer([{id:1,level:4,short:'นนทบุรี',en:'',province:'นนทบุรี',lat:13.8,lng:100.5,name:'จังหวัดนนทบุรี'}])).length);});

@@ -60,7 +60,8 @@ export async function runModelJob({force=false,ifOlderThanMinutes=0}={}){
   const runId=new Date().toISOString().replace(/[:.]/g,'-');
   const data={...await modelInputs()};
   // Point observations for validation only (not assimilated): citizen reports, BMA official flooded roads/reports (wet), road sensors (0 = dry).
-  try{const ev=await readJson(LIVE+'evidence.json');data.observations=ev.items.filter(i=>i.kind==='citizen'||(i.kind==='sensor'&&!i.subkind)||((i.subkind==='bma-road'||i.subkind==='bma-report')&&i.precision==='point'&&Number.isFinite(i.lat))).map(i=>({kind:i.subkind?.startsWith('bma')?'bma':i.kind,lat:i.lat,lng:i.lng,at:i.at,wet:i.kind==='citizen'||i.subkind?.startsWith('bma')||i.depthCm>=5}));data.evidenceFetchedAt=ev.fetchedAt;}
+  // News-outlet social posts that name a specific road (resolved to OSM) add wet points at that road.
+  try{const ev=await readJson(LIVE+'evidence.json');data.observations=ev.items.filter(i=>i.kind==='citizen'||(i.kind==='sensor'&&!i.subkind)||((i.subkind==='bma-road'||i.subkind==='bma-report')&&i.precision==='point'&&Number.isFinite(i.lat))).map(i=>({kind:i.subkind?.startsWith('bma')?'bma':i.kind,lat:i.lat,lng:i.lng,at:i.at,wet:i.kind==='citizen'||i.subkind?.startsWith('bma')||i.depthCm>=5}));for(const i of ev.items)if(i.subkind==='media')for(const g of i.geo||[])if(g.drawn&&g.lines?.[0]?.length){const p=g.lines[0][Math.floor(g.lines[0].length/2)];data.observations.push({kind:'media',lat:p[0],lng:p[1],at:i.at,wet:true});}data.evidenceFetchedAt=ev.fetchedAt;}
   catch{data.observations=[];}
   await mkdir(RUNS,{recursive:true});const input=RUNS+runId+'-input.json',out=LIVE+'model/'+runId+'/';
   await writeFile(input,JSON.stringify(data));
