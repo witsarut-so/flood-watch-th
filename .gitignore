@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+node_modules/
+.vercel/
+*.log
+*.tmp
+# generated / downloaded data: rebuilt by the prepare scripts, shipped to CI as a release asset
+data/
+public/data/
+public/live/
+numba-cache/
+# local-only photos from a user report; never publish
+public/reports/
+.vercel
+.env*

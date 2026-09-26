@@ -1,0 +1,93 @@
+<!doctype html><html lang="th"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Flood Watch • ติดตามน้ำท่วม</title><meta name="description" content="แผนที่ติดตามน้ำท่วมจากรายงานประชาชน โซเชียล ข่าว เซนเซอร์ ข้อมูลหน่วยงาน และแบบจำลองน้ำขังจากฝน"><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M8 1 15 8 8 15 1 8z%22 fill=%22%23087c68%22/%3E%3C/svg%3E"><link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""><link rel="stylesheet" href="/style.css"></head><body>
+<header><a class="brand" href="/">◈ <span>Flood Watch<small>ติดตามน้ำท่วม</small></span></a><nav><a href="#map-section">แผนที่</a><a href="#situation">สถานการณ์</a><a href="#model">แบบจำลอง</a><a href="#about">แหล่งข้อมูล</a></nav><span class="status" id="live-status"><i></i> กำลังโหลด…</span></header>
+<main>
+<section id="map-section" class="map-section" aria-label="แผนที่น้ำท่วม">
+<div class="map-wrap"><div id="map" aria-label="แผนที่น้ำท่วม"></div>
+<button id="filter-toggle" class="filter-toggle" aria-controls="filters" aria-expanded="true">☰ ตัวกรอง</button>
+<aside id="filters" class="filters" aria-label="ตัวกรองแผนที่">
+ <div class="f-head"><b>ตัวกรองแผนที่</b><button id="filter-close" class="f-close" aria-label="ซ่อนตัวกรอง">✕</button></div>
+ <div class="f-search"><input id="place-search" type="search" list="place-list" placeholder="ค้นหาจังหวัด อำเภอ เขต ตำบล" autocomplete="off"><datalist id="place-list"></datalist></div>
+ <div class="f-quick"><select id="go-province" aria-label="ไปยังจังหวัด"><option value="">ไปจังหวัด…</option></select><button id="go-region">ทั้งภูมิภาค</button><button id="go-me">📍 ตำแหน่งฉัน</button></div>
+ <fieldset><legend>แบบจำลองน้ำขังจากฝน</legend>
+  <label class="f-row"><input type="checkbox" id="f-model" checked><i class="sw line" style="--c:#9c36b5"></i>บริเวณ/ถนนที่แบบจำลองมีน้ำ</label>
+  <div class="f-sub">
+   <label>การระบายน้ำ (สมมติฐาน)<select id="f-scenario"><option value="0">ไม่ระบาย (0 มม./ชม.)</option><option value="3" selected>กลาง (3 มม./ชม.)</option><option value="8">มาก (8 มม./ชม.)</option></select></label>
+   <label>แสดงเมื่อลึกตั้งแต่<select id="f-mindepth"><option value="2">2 ซม.</option><option value="10">10 ซม.</option><option value="30">30 ซม.</option><option value="50">50 ซม.</option></select></label>
+   <label>เวลา: <b id="f-time-label">–</b><input type="range" id="f-time" min="0" max="0" value="0"></label>
+   <div class="f-depth"><span style="--c:#e599f7">2–10</span><span style="--c:#cc5de8">10–30</span><span style="--c:#9c36b5">30–50</span><span style="--c:#5f0f7a">≥50 ซม.</span></div>
+  </div>
+ </fieldset>
+ <fieldset><legend>ฝน</legend>
+  <label class="f-row"><input type="checkbox" id="f-rainrate" checked><i class="sw fill rainbar"></i>ความเข้มฝนรายชั่วโมง (ประมาณจากสถานี)<b id="c-rainrate"></b></label>
+  <div class="f-rainscale"><span>1</span><span>2.5</span><span>5</span><span>10</span><span>20</span><span>35</span><span>50</span><span>80 มม./ชม.</span></div>
+  <label class="f-row"><input type="checkbox" id="f-rain"><i class="sw dot" style="--c:#2b8a3e"></i>ฝนสะสม 24 ชม. > 35 มม.<b id="c-rain"></b></label>
+ </fieldset>
+ <fieldset><legend>รายงาน ข่าว และโซเชียล</legend>
+  <label class="f-row"><input type="checkbox" id="f-citizen" checked><i class="sw dot" style="--c:#e03131"></i>รายงานประชาชน (Traffy)<b id="c-citizen"></b></label>
+  <div class="f-sub"><label>ช่วงเวลา<select id="f-citizen-hours"><option value="1">1 ชม.ล่าสุด</option><option value="3">3 ชม.</option><option value="6" selected>6 ชม.</option><option value="12">12 ชม.</option><option value="24">24 ชม.</option></select></label></div>
+  <label class="f-row"><input type="checkbox" id="f-news" checked><i class="sw dot" style="--c:#d6336c"></i>ข่าว<b id="c-news"></b></label>
+  <label class="f-row"><input type="checkbox" id="f-social" checked><i class="sw emoji">💬</i>โซเชียล (Bluesky)<b id="c-social"></b></label>
+  <label class="f-row"><input type="checkbox" id="f-mentions" checked><i class="sw line" style="--c:#ff006e"></i>ถนน/ซอย/หมู่บ้านที่ถูกพูดถึง<b id="c-mentions"></b></label>
+ </fieldset>
+ <fieldset><legend>เซนเซอร์และข้อมูลหน่วยงาน</legend>
+  <label class="f-row"><input type="checkbox" id="f-road" checked><i class="sw dot" style="--c:#212529"></i>เซนเซอร์น้ำท่วมถนน<b id="c-road"></b></label>
+  <div class="f-sub"><label class="f-inline"><input type="checkbox" id="f-road-wet" checked> เฉพาะจุดที่วัดพบน้ำ</label></div>
+  <label class="f-row"><input type="checkbox" id="f-flow" checked><i class="sw tag" style="--c:#364fc7">⇢</i>อัตราการไหลในคลอง (ลบ.ม./วิ)<b id="c-flow"></b></label>
+  <label class="f-row"><input type="checkbox" id="f-canal"><i class="sw dot" style="--c:#5c7cfa"></i>ระดับน้ำคลอง<b id="c-canal"></b></label>
+  <label class="f-row"><input type="checkbox" id="f-gate"><i class="sw tag" style="--c:#495057">▦</i>ประตูระบายน้ำ/ฝาย<b id="c-gate"></b></label>
+  <label class="f-row"><input type="checkbox" id="f-dam"><i class="sw dot" style="--c:#6f4e37"></i>เขื่อนหลัก<b id="c-dam"></b></label>
+  <label class="f-row"><input type="checkbox" id="f-gauges"><i class="sw dot" style="--c:#1971c2"></i>สถานีระดับน้ำแม่น้ำ<b id="c-gauges"></b></label>
+ </fieldset>
+ <fieldset><legend>ทางน้ำ</legend>
+  <label class="f-row"><input type="checkbox" id="f-river" checked><i class="sw line" style="--c:#1c7ed6"></i>แม่น้ำ</label>
+  <label class="f-row"><input type="checkbox" id="f-canalway" checked><i class="sw line" style="--c:#0c8599"></i>คลอง</label>
+  <label class="f-row"><input type="checkbox" id="f-drain" checked><i class="sw line" style="--c:#3bc9db"></i>ท่อ/คูระบายน้ำ</label>
+  <label class="f-row"><input type="checkbox" id="f-waterarea" checked><i class="sw fill" style="--c:#a5d8ff"></i>บ่อ บึง ผิวแม่น้ำ</label>
+ </fieldset>
+ <fieldset><legend>ถนน</legend>
+  <label class="f-row"><input type="checkbox" id="f-road-major" checked><i class="sw line" style="--c:#f76707"></i>ถนนสายหลัก</label>
+  <label class="f-row"><input type="checkbox" id="f-road-secondary" checked><i class="sw line" style="--c:#f59f00"></i>ถนนรอง</label>
+  <label class="f-row"><input type="checkbox" id="f-road-minor" checked><i class="sw line" style="--c:#e0b25c"></i>ซอย/ถนนย่อย (ซูมใกล้)</label>
+ </fieldset>
+ <fieldset><legend>แผนที่</legend>
+  <label class="f-row"><input type="checkbox" id="f-boundary" checked><i class="sw dash" style="--c:#495057"></i>ขอบเขตจังหวัดที่มีแบบจำลอง</label>
+  <label class="f-row"><input type="checkbox" id="f-muted" checked><i class="sw fill" style="--c:#dee2e6"></i>แผนที่ฐานสีเทา</label>
+ </fieldset>
+ <p class="f-note">แบบจำลอง คลอง ท่อ และซอย มีรายละเอียดใน 10 จังหวัด: กรุงเทพฯ นนทบุรี ปทุมธานี อยุธยา สมุทรปราการ นครปฐม สระบุรี นครนายก ชลบุรี กาญจนบุรี • ข่าว ฝน เขื่อน และระดับน้ำครอบคลุมทั้งประเทศ</p>
+</aside>
+<div id="map-chip" class="map-chip" hidden></div>
+</div>
+</section>
+
+<section id="situation" class="panel evidence-panel" aria-labelledby="ev-title"><span class="eyebrow">สถานการณ์ล่าสุด · ข่าว • โซเชียล • ประชาชน • หน่วยงานรัฐ</span><h2 id="ev-title">สถานการณ์น้ำท่วมรายจังหวัด</h2><p id="ev-status" role="status" aria-live="polite">กำลังโหลด…</p>
+<div class="ev-grid"><div><h3>จังหวัดที่มีหลักฐานมากที่สุด <small>(กดเพื่อซูม)</small></h3><div class="table-scroll"><table class="ev-table"><thead><tr><th>จังหวัด</th><th>ข่าว</th><th>โซเชียล</th><th>ประชาชน</th><th>สถานีฝนหนัก</th><th>เซนเซอร์ถนน</th><th>ล่าสุด</th></tr></thead><tbody id="ev-provinces"></tbody></table></div></div><div><h3>ข่าวและโพสต์ล่าสุด <small>(กดเพื่อดูสถานที่บนแผนที่)</small></h3><ul id="ev-news-list" class="ev-news"></ul></div></div></section>
+
+<section id="model" class="panel model-panel" aria-labelledby="model-title"><span class="eyebrow">แบบจำลองทดลอง · 10 จังหวัด</span><h2 id="model-title">บริเวณที่อาจมีน้ำขังจากฝนสะสม <span class="pill">ยังไม่สอบเทียบ</span></h2>
+<p>คำนวณการไหลและการขังของน้ำฝนย้อนหลังสูงสุด 24 ชั่วโมง บนภูมิประเทศ 100 ม. (กาญจนบุรี 250 ม.) น้ำไหลออกที่ขอบพื้นที่ได้ • ระบบรันใหม่อัตโนมัติทุก 2 ชั่วโมง • ใช้ประกอบการตัดสินใจ ไม่ใช่ประกาศทางการ</p>
+<p id="model-job-status" role="status" aria-live="polite">กำลังโหลดผลล่าสุด…</p>
+<div id="model-results" hidden>
+ <div class="table-scroll"><table class="ev-table model-table"><thead><tr><th>จังหวัด</th><th>พื้นที่มีน้ำ ≥ 2 ซม. (ตร.กม.)</th><th>ความละเอียด</th><th>เวลา</th></tr></thead><tbody id="model-provinces"></tbody></table></div>
+ <p id="model-validation" class="model-validation"></p>
+</div>
+<details class="model-details"><summary>วิธีคำนวณ ข้อมูลเข้า และข้อจำกัด</summary>
+ <div class="model-readiness"><div><b>ข้อมูลที่ใช้</b><p>ภูมิประเทศ Copernicus DEM 30 ม. • ฝนรายชั่วโมงจากสถานี ThaiWater (สูงสุด 16 สถานีต่อพื้นที่) • ถนน OSM (ตัดทางยกระดับ/สะพาน) • การซึมและการระบายเป็นสมมติฐาน 3 ระดับ</p></div><div><b>ยังไม่ได้ใช้</b><p>ระดับน้ำแม่น้ำ/คลองเป็นเงื่อนไขขอบ • ท่อ ประตูน้ำ ปั๊ม • การปล่อยน้ำเขื่อน • น้ำหลากจากต้นน้ำนอกพื้นที่ (สำคัญมากในกาญจนบุรี สระบุรี นครนายก)</p></div></div>
+ <p id="model-balance"></p>
+ <p class="model-warning">สีม่วงบอกความลึกเฉลี่ยของเซลล์ ไม่ใช่ความลึกที่วัดบนถนนเส้นนั้น • พื้นที่ภูเขาแบบจำลองแสดงเฉพาะน้ำฝนที่ขังในร่องหุบ ไม่ได้จำลองน้ำป่าหรือแม่น้ำล้นตลิ่ง • ผลตรวจกับรายงานใช้บอกความน่าเชื่อถือ ยังไม่ได้นำไปปรับแบบจำลอง</p>
+</details>
+</section>
+
+<section id="about" class="panel about"><span class="eyebrow">แหล่งข้อมูลและข้อจำกัด</span><h2>ข้อมูลมาจากไหน</h2>
+<ul class="sources">
+ <li><b>รายงานประชาชน:</b> <a href="https://www.traffy.in.th/" target="_blank" rel="noreferrer">Traffy Fondue</a> (กรุงเทพมหานคร) คัดเฉพาะเรื่องน้ำท่วม ลบเบอร์โทร/อีเมลก่อนแสดง เป็นเรื่องร้องเรียนที่ยังไม่ได้ตรวจสอบภาคสนาม</li>
+ <li><b>โซเชียล:</b> โพสต์สาธารณะบน Bluesky ที่พูดถึงน้ำท่วม • X, Facebook, Instagram และ TikTok ไม่มีช่องทางค้นหาสาธารณะที่อนุญาต จึงไม่ได้ดึงโดยตรง (บางโพสต์จากเพจสำนักข่าวมาทาง Google News)</li>
+ <li><b>ข่าว:</b> RSS ของมติชน ข่าวสด ประชาชาติธุรกิจ ไทยรัฐ เดลินิวส์ Bangkok Post และ Google News • แสดงหัวข่าวพร้อมลิงก์ต้นฉบับ</li>
+ <li><b>ถนน/ซอย/หมู่บ้านที่ถูกพูดถึง:</b> จับคู่ชื่อในข้อความกับ OpenStreetMap เฉพาะเมื่อบริบทชัดเจน (พิกัดของรายงาน หรือจังหวัด/อำเภอที่ระบุ) ถนนยาวแสดงเฉพาะช่วงใกล้พื้นที่ที่ระบุ ชื่อที่ซ้ำหลายพื้นที่จะแสดงในรายการแต่ไม่วาด</li>
+ <li><b>เซนเซอร์และหน่วยงาน:</b> <a href="https://www.thaiwater.net/" target="_blank" rel="noreferrer">คลังข้อมูลน้ำแห่งชาติ (ThaiWater)</a> — เซนเซอร์น้ำท่วมถนนและอัตราการไหลในคลองของสำนักการระบายน้ำ กทม., ระดับน้ำคลอง, ประตูระบายน้ำ, ฝนรายชั่วโมง/24 ชม., เขื่อนของกรมชลประทาน • อัตราการสูบของสถานีสูบน้ำยังไม่มีข้อมูลสาธารณะ</li>
+ <li><b>ความเข้มฝน:</b> ประมาณจากสถานีวัดฝนรายชั่วโมงด้วยการถ่วงน้ำหนักตามระยะ (ไม่เกิน 25 กม. จากสถานี) ไม่ใช่ภาพเรดาร์</li>
+ <li><b>แผนที่ ถนน ทางน้ำ ขอบเขต:</b> © ผู้ร่วมพัฒนา <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> (ODbL) • <b>ภูมิประเทศ:</b> Copernicus DEM GLO-30 © DLR e.V. 2010–2014 และ © Airbus Defence and Space GmbH 2014–2018, ESA Copernicus</li>
+</ul>
+<p class="model-warning">เว็บไซต์นี้รวบรวมข้อมูลสาธารณะเพื่อช่วยให้เห็นภาพรวม ไม่ใช่ระบบเตือนภัยทางการ ในเหตุฉุกเฉินโทร 1784 (ปภ.) หรือ 199 • ติดตามประกาศจาก <a href="https://www.disaster.go.th/" target="_blank" rel="noreferrer">กรมป้องกันและบรรเทาสาธารณภัย</a> และหน่วยงานในพื้นที่</p>
+</section>
+</main>
+<footer>Flood Watch — ติดตามน้ำท่วมจากข้อมูลสาธารณะ <span id="footer-updated"></span></footer>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script><script src="/app.js"></script><script src="/basemap.js"></script><script src="/model.js"></script><script src="/evidence.js"></script></body></html>
