@@ -41,5 +41,8 @@ function drawBasemap(){
 function setMuted(){map?.getContainer().classList.toggle('muted-base',$('f-muted').checked);}
 if(map){
  map.on('moveend',drawBasemap);onFilter(Object.values(basemapFilter),drawBasemap);onFilter(['f-muted'],setMuted);setMuted();
- fetchJson('/data/basemap/national.json.gz').then(n=>{basemap.national=[...decodeRows(n.rivers),...decodeRows(n.roads)];drawBasemap();}).catch(()=>{});
+ // Data saver: simplified national layer first; full detail once the viewer zooms in to 9+.
+ const loadNational=file=>fetchJson(`/data/basemap/${file}`).then(n=>{basemap.national=[...decodeRows(n.rivers),...decodeRows(n.roads)];drawBasemap();});
+ let fullNational=false;loadNational('national-lite.json.gz').catch(()=>{fullNational=true;return loadNational('national.json.gz');}).catch(()=>{});
+ map.on('zoomend',()=>{if(!fullNational&&map.getZoom()>=9){fullNational=true;loadNational('national.json.gz').catch(()=>{fullNational=false;});}});
 }

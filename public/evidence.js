@@ -5,7 +5,7 @@ const kindLabel={bmaroad:'จุดวัด กทม.',bmareport:'รายง
 const MENTION='#ff006e';
 const evidenceLayers=typeof L!=='undefined'?Object.fromEntries([...Object.keys(evidenceKinds),'mentions'].map(k=>[k,L.layerGroup()])):{};
 const evidenceRenderer=typeof L!=='undefined'?L.canvas({padding:.3,pane:'evidence'}):null,mentionRenderer=typeof L!=='undefined'?L.canvas({padding:.3,pane:'mentions'}):null;
-let evidenceData=null;
+let evidenceData=null,evidenceTimer=null;
 const safeUrl=u=>/^https?:\/\//.test(u||'')?esc(u):'#';
 const kindOf=i=>i.subkind==='bma-road'?'bmaroad':i.subkind==='bma-report'?'bmareport':i.kind==='citizen'?'citizen':i.kind==='social'?'social':i.kind==='news'?'news':i.subkind==='rain'?'rain':i.subkind==='dam'?'dam':i.subkind==='flow'?'flow':i.subkind==='canal'?'canal':i.subkind==='gate'?'gate':'road';
 const precisionText={point:'พิกัดจุด',subdistrict:'ระดับตำบล/แขวง',district:'ระดับอำเภอ/เขต',province:'ระดับจังหวัด'};
@@ -110,11 +110,15 @@ function renderSituation(){
   if(g||p){li.classList.add('locatable');li.onclick=e=>{if(e.target.tagName==='A')return;if(g?.lines?.length)map?.fitBounds(L.polyline(g.lines).getBounds().pad(.3));else if(g)map?.setView([g.lat,g.lng],15);else map?.flyTo([p.lat,p.lng],p.precision==='province'?9:12);$('map-section').scrollIntoView({behavior:'smooth'});};}
   list.append(li);}
 }
+// Data saver: the lite file (Traffy last 6 h, trimmed fields) loads first; the full file only for longer windows.
+const needFull=()=>Number($('f-citizen-hours').value)>(evidenceData?.lite?.citizenHours||6);
 async function loadEvidence(){
- try{evidenceData=await fetchJson('/live/evidence.json',{cache:'no-cache'});rainGrid=null;renderSituation();paintEvidence();paintRain();}
+ try{const want=needFull()?'/live/evidence.json':'/live/evidence-lite.json';
+  evidenceData=await fetchJson(want,{cache:'no-cache'}).catch(()=>fetchJson('/live/evidence.json',{cache:'no-cache'}));rainGrid=null;renderSituation();paintEvidence();paintRain();}
  catch(err){$('ev-status').textContent='โหลดข้อมูลไม่สำเร็จ • จะลองใหม่อัตโนมัติ';}
- setTimeout(loadEvidence,document.hidden?600000:300000);
+ evidenceTimer=setTimeout(loadEvidence,document.hidden?600000:300000);
 }
+onFilter(['f-citizen-hours'],()=>{if(evidenceData?.lite&&needFull()){clearTimeout(evidenceTimer);$('ev-status').textContent='กำลังโหลดรายงานประชาชนช่วงที่เลือก…';loadEvidence();}});
 onFilter(['f-bmaroad','f-bmareport','f-bmaapprox','f-citizen','f-social','f-road','f-rain','f-dam','f-news','f-flow','f-canal','f-gate','f-mentions','f-citizen-hours','f-road-wet'],paintEvidence);
 onFilter(['f-rainrate'],paintRain);
 if(map){let t,wasNear=map.getZoom()>=11;map.on('moveend',()=>{clearTimeout(t);t=setTimeout(paintRain,200);});map.on('zoomend',()=>{const near=map.getZoom()>=11;if(near!==wasNear){wasNear=near;paintEvidence();}});}

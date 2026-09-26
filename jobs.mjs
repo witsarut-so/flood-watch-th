@@ -21,6 +21,7 @@ export async function runEvidenceJob(){
  await mkdir(LIVE,{recursive:true});
  const ev=await getEvidence({wait:true});const {refreshing,...clean}=ev;
  await writeAtomic(LIVE+'evidence.json',JSON.stringify(clean));
+ await writeAtomic(LIVE+'evidence-lite.json',JSON.stringify(liteEvidence(clean)));
  try{const w=await getWater();await writeAtomic(LIVE+'waterlevels.json',JSON.stringify(w));}catch(e){console.error('[waterlevels]',e.message);}
  return {fetchedAt:ev.fetchedAt,items:ev.items.length,errors:ev.errors.map(e=>e.source)};
 }
@@ -39,6 +40,15 @@ export async function runThaiJob({upload=true}={}){
  if(upload){const token=(await run('gh',['auth','token','-u',RELAY_GH_USER])).stdout.trim();
   await run('gh',['release','upload','live',file,'--clobber','-R',RELAY_REPO],{env:{...process.env,GH_TOKEN:token}});report.uploaded=true;}
  return {fetchedAt:now,...report};
+}
+
+// First-load version for phones: citizen reports from the last LITE_HOURS only (the default filter), and fields the page
+// never shows removed. The page fetches the full evidence.json only when a longer report window is chosen.
+const LITE_HOURS=6,DROP=['excerpt','depthPhrases','feed','relevance','articleRead','precisionNote'];
+export function liteEvidence(ev){
+ const cutoff=Date.now()-LITE_HOURS*3600000;
+ const items=ev.items.filter(i=>i.kind!=='citizen'||Date.parse(i.at)>=cutoff).map(i=>{const o={...i};for(const k of DROP)delete o[k];if(o.kind==='news'&&o.places)o.places=o.places.slice(0,5);return o;});
+ return {...ev,items,lite:{citizenHours:LITE_HOURS,citizenTotal:ev.items.filter(i=>i.kind==='citizen').length}};
 }
 
 let running=null;

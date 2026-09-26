@@ -21,7 +21,7 @@ from rasterio.transform import from_origin
 from rasterio.warp import transform
 
 ROOT=Path(__file__).resolve().parents[1];OUT=ROOT/'public/data';CACHE=ROOT/'data/osm-cache'
-MAIN_TILE=.25;MINOR_TILE=.05;OVERVIEW_DEG=.002
+MAIN_TILE=.25;MINOR_TILE=.05;OVERVIEW_DEG=.002;OVERVIEW_LO_DEG=.006  # lo-res overview for zoom <= 9 (9x fewer pixels)
 ROAD_GROUP={'motorway':'major','trunk':'major','primary':'major','motorway_link':'major','trunk_link':'major','primary_link':'major','secondary':'secondary','secondary_link':'secondary','tertiary':'secondary','tertiary_link':'secondary','unclassified':'minor','residential':'minor','living_street':'minor'}
 MODEL_ROADS=set(ROAD_GROUP)
 WATERWAYS={'river':'river','canal':'canal','drain':'drain','ditch':'drain','stream':'stream'}
@@ -43,6 +43,10 @@ def enc(c):
     a=[round(x*1e5) for x,_ in c];b=[round(y*1e5) for _,y in c];row=[a[0],b[0]]
     for i in range(1,len(a)):row+=[a[i]-a[i-1],b[i]-b[i-1]]
     return row
+def decode(row):
+    lat,lng=row[0],row[1];out=[(lat/1e5,lng/1e5)]
+    for i in range(2,len(row),2):lat+=row[i];lng+=row[i+1];out.append((lat/1e5,lng/1e5))
+    return out
 def geom(el):return [(p['lat'],p['lon']) for p in el.get('geometry',[]) if p]
 def key(lat,lng,t):return f'{math.floor(lat/t)}_{math.floor(lng/t)}'
 def at_grade(t):
@@ -140,18 +144,18 @@ def build_model_roads(els,meta):
     for k,v in tiles.items():dump(OUT/f'model-roads/{meta["id"]}/{k}.json.gz',v)
     return sorted(tiles)
 
-def build_overview(meta):
+def build_overview(meta,deg=OVERVIEW_DEG,sub='overview'):
     """Lat/lng-aligned raster of model cell indices so the browser can paint a frame without reprojection."""
     with rasterio.open(ROOT/'data/domains'/meta['id']/'mask.tif') as src:mask=src.read(1);aff=src.transform;crs=src.crs
-    w,s,e,n=meta['bbox'];W=int(math.ceil((e-w)/OVERVIEW_DEG));H=int(math.ceil((n-s)/OVERVIEW_DEG))
-    lng=w+(np.arange(W)+.5)*OVERVIEW_DEG;lat=n-(np.arange(H)+.5)*OVERVIEW_DEG;LL,LA=np.meshgrid(lng,lat)
+    w,s,e,n=meta['bbox'];W=int(math.ceil((e-w)/deg));H=int(math.ceil((n-s)/deg))
+    lng=w+(np.arange(W)+.5)*deg;lat=n-(np.arange(H)+.5)*deg;LL,LA=np.meshgrid(lng,lat)
     X,Y=transform('EPSG:4326',crs,LL.ravel().tolist(),LA.ravel().tolist());X=np.array(X);Y=np.array(Y)
     col=np.floor((X-aff.c)/aff.a).astype(np.int64);row=np.floor((Y-aff.f)/aff.e).astype(np.int64);R,C=mask.shape
     ok=(row>=0)&(row<R)&(col>=0)&(col<C);idx=np.full(W*H,0xFFFFFFFF,dtype='<u4');cells=row[ok]*C+col[ok]
     inside=mask.ravel()[cells]>0;tmp=idx[ok];tmp[inside]=cells[inside].astype('<u4');idx[ok]=tmp
-    p=OUT/f'overview/{meta["id"]}.bin.gz';p.parent.mkdir(parents=True,exist_ok=True)
+    p=OUT/f'{sub}/{meta["id"]}.bin.gz';p.parent.mkdir(parents=True,exist_ok=True)
     with gzip.open(p,'wb') as f:f.write(idx.tobytes())
-    return {'width':W,'height':H,'bounds':[w,n-H*OVERVIEW_DEG,w+W*OVERVIEW_DEG,n]}
+    return {'width':W,'height':H,'bounds':[w,n-H*deg,w+W*deg,n]}
 
 NAMED_KIND=[('ถนน','road'),('ซอย','soi'),('หมู่บ้าน','village'),('คลอง','canal'),('แม่น้ำ','river'),('สะพาน','bridge'),('แยก','junction')]
 def build_named(els,province):
@@ -203,18 +207,26 @@ def build_named(els,province):
 if __name__=='__main__':
     doms=json.loads((ROOT/'model/domains.json').read_text())['domains']
     els=load_elements();print('elements',len(els),flush=True)
-    for sub in ('basemap/main','basemap/minor','model-roads','overview'):shutil.rmtree(OUT/sub,ignore_errors=True)
+    for sub in ('basemap/main','basemap/minor','model-roads','overview','overview-lo'):shutil.rmtree(OUT/sub,ignore_errors=True)
     province=ProvinceLookup()
     mains,minors=build_basemap(els);print('basemap tiles',len(mains),len(minors),flush=True)
     domains=[]
     for d in doms:
         meta=json.loads((ROOT/'data/domains'/d['id']/'metadata.json').read_text())
-        tiles=build_model_roads(els,meta);ov=build_overview(meta)
-        domains.append({'id':d['id'],'name':d['name'],'cellSizeM':meta['cellSizeM'],'shape':meta['shape'],'bbox':meta['bbox'],'provinces':[p['name'] for p in meta['provinces']],'roadTiles':tiles,'overview':ov})
+        tiles=build_model_roads(els,meta);ov=build_overview(meta);ovlo=build_overview(meta,OVERVIEW_LO_DEG,'overview-lo')
+        domains.append({'id':d['id'],'name':d['name'],'cellSizeM':meta['cellSizeM'],'shape':meta['shape'],'bbox':meta['bbox'],'provinces':[p['name'] for p in meta['provinces']],'roadTiles':tiles,'overview':ov,'overviewLo':ovlo})
         print(d['id'],'road tiles',len(tiles),'overview',ov['width'],'x',ov['height'],flush=True)
     dump(OUT/'domains.json',{'mainTileDeg':MAIN_TILE,'minorTileDeg':MINOR_TILE,'mainTiles':mains,'minorTiles':minors,'domains':domains})
     shutil.copy(ROOT/'data/boundary/provinces.geojson',OUT/'provinces.geojson')
-    dump(OUT/'basemap/national.json.gz',json.loads((ROOT/'data/basemap/basemap-national.json').read_text()))
+    nat=json.loads((ROOT/'data/basemap/basemap-national.json').read_text());dump(OUT/'basemap/national.json.gz',nat)
+    # lite national layer for the first screen: 600 m simplification, drop pieces shorter than 3 km
+    def lite(rows):
+        out=[]
+        for r in rows:
+            c=thin(decode(r[1:]),600)
+            if sum(math.hypot((c[k][0]-c[k-1][0])*111320,(c[k][1]-c[k-1][1])*108000) for k in range(1,len(c)))>=3000:out.append([r[0]]+enc(c))
+        return out
+    dump(OUT/'basemap/national-lite.json.gz',{'rivers':lite(nat['rivers']),'roads':lite(nat['roads'])})
     places=json.loads((ROOT/'data/gazetteer/th-admin.json').read_text())['places']
     dump(OUT/'places.json',[[p['short'],p['level'],p['province'],p['lat'],p['lng']] for p in places])
     print('named features',build_named(els,province),flush=True)

@@ -14,7 +14,9 @@ const scenarioIndex=()=>Math.max(0,modelRun.drainageScenariosMmH.map(String).ind
 function frameIndex(d){const back=Number($('f-time').max)-Number($('f-time').value);return Math.max(0,d.times.length-1-back);}
 function lru(map,key,value,max){map.set(key,value);if(map.size>max)map.delete(map.keys().next().value);return value;}
 async function depthFrame(d,k,i){const key=`${modelRun.runId}:${d}:${k}:${i}`;if(frameCache.has(key))return frameCache.get(key);return lru(frameCache,key,fetchBytes(`${modelRun.base}${d}-s${k}-f${i}.bin.gz`),24);}
-function overview(d){if(!overviewCache.has(d))overviewCache.set(d,fetchBytes(`/data/overview/${d}.bin.gz`).then(b=>new Uint32Array(b.buffer,b.byteOffset,b.byteLength/4)));return overviewCache.get(d);}
+// zoom <= 9 uses the 3x coarser overview (data saver); the full one from zoom 10
+const loRes=()=>map.getZoom()<=9;
+function overview(d,lo){const key=(lo?'lo:':'')+d;if(!overviewCache.has(key))overviewCache.set(key,fetchBytes(`/data/${lo?'overview-lo':'overview'}/${d}.bin.gz`).then(b=>new Uint32Array(b.buffer,b.byteOffset,b.byteLength/4)));return overviewCache.get(key);}
 function roadTile(d,k){const key=d+k;if(!roadTileCache.has(key))lru(roadTileCache,key,fetchJson(`/data/model-roads/${d}/${k}.json.gz`).then(rows=>rows.map(p=>{let lat=p[1],lng=p[2];const pts=[[lat/1e5,lng/1e5]];for(let i=3;i<p.length;i+=2){lat+=p[i];lng+=p[i+1];pts.push([lat/1e5,lng/1e5]);}return {cell:p[0],pts};})),120);return roadTileCache.get(key);}
 const domainInfo=id=>domainsInfo?.domains.find(x=>x.id===id);
 const visibleDomains=()=>{const b=map.getBounds();return liveDomains().filter(d=>b.intersects([[d.bbox[1],d.bbox[0]],[d.bbox[3],d.bbox[2]]]));};
@@ -37,8 +39,8 @@ async function paintSimulation(){
  const k=scenarioIndex(),minCm=Number($('f-mindepth').value)||2,z=map.getZoom(),doms=visibleDomains(),layers=[];
  try{
   if(z<12){
-   for(const d of doms){const info=domainInfo(d.id);if(!info)continue;const [idx,depth]=await Promise.all([overview(d.id),depthFrame(d.id,k,frameIndex(d))]);if(token!==paintToken)return;
-    const {width:W,height:H,bounds:[w,s,e,n]}=info.overview,cv=document.createElement('canvas');cv.width=W;cv.height=H;const ctx=cv.getContext('2d'),img=ctx.createImageData(W,H),px=img.data;
+   for(const d of doms){const info=domainInfo(d.id);if(!info)continue;const lo=loRes()&&!!info.overviewLo;const [idx,depth]=await Promise.all([overview(d.id,lo),depthFrame(d.id,k,frameIndex(d))]);if(token!==paintToken)return;
+    const {width:W,height:H,bounds:[w,s,e,n]}=lo?info.overviewLo:info.overview,cv=document.createElement('canvas');cv.width=W;cv.height=H;const ctx=cv.getContext('2d'),img=ctx.createImageData(W,H),px=img.data;
     for(let p=0;p<idx.length;p++){const c=idx[p];if(c===0xFFFFFFFF)continue;const dv=depth[c];if(dv<minCm)continue;const [,,,[r,g,b]]=depthBins[binOf(dv)];const o=p*4;px[o]=r;px[o+1]=g;px[o+2]=b;px[o+3]=210;}
     ctx.putImageData(img,0,0);layers.push(L.imageOverlay(cv.toDataURL(),[[s,w],[n,e]],{pane:'flood',opacity:.85,interactive:false,className:'pixelated'}));}
   }else{
