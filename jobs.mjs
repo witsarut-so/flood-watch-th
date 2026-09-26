@@ -32,8 +32,8 @@ export async function runModelJob({force=false,ifOlderThanMinutes=0}={}){
  running=(async()=>{
   const runId=new Date().toISOString().replace(/[:.]/g,'-');
   const data={...await modelInputs()};
-  // Point observations for validation only (not assimilated): citizen flood reports and road sensors.
-  try{const ev=await readJson(LIVE+'evidence.json');data.observations=ev.items.filter(i=>i.kind==='citizen'||(i.kind==='sensor'&&!i.subkind)).map(i=>({kind:i.kind,lat:i.lat,lng:i.lng,at:i.at,wet:i.kind==='citizen'||i.depthCm>=5}));data.evidenceFetchedAt=ev.fetchedAt;}
+  // Point observations for validation only (not assimilated): citizen reports, BMA official flooded roads/reports (wet), road sensors (0 = dry).
+  try{const ev=await readJson(LIVE+'evidence.json');data.observations=ev.items.filter(i=>i.kind==='citizen'||(i.kind==='sensor'&&!i.subkind)||((i.subkind==='bma-road'||i.subkind==='bma-report')&&i.precision==='point'&&Number.isFinite(i.lat))).map(i=>({kind:i.subkind?.startsWith('bma')?'bma':i.kind,lat:i.lat,lng:i.lng,at:i.at,wet:i.kind==='citizen'||i.subkind?.startsWith('bma')||i.depthCm>=5}));data.evidenceFetchedAt=ev.fetchedAt;}
   catch{data.observations=[];}
   await mkdir(RUNS,{recursive:true});const input=RUNS+runId+'-input.json',out=LIVE+'model/'+runId+'/';
   await writeFile(input,JSON.stringify(data));

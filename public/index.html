@@ -17,6 +17,11 @@
    <div class="f-depth"><span style="--c:#e599f7">2–10</span><span style="--c:#cc5de8">10–30</span><span style="--c:#9c36b5">30–50</span><span style="--c:#5f0f7a">≥50 ซม.</span></div>
   </div>
  </fieldset>
+ <fieldset><legend>ถนนน้ำท่วม · ทางการ กทม.</legend>
+  <label class="f-row"><input type="checkbox" id="f-bmaroad" checked><i class="sw line sevbar"></i>ถนนที่จุดวัดพบน้ำ<b id="c-bmaroad"></b></label>
+  <label class="f-row"><input type="checkbox" id="f-bmareport" checked><i class="sw dash" style="--c:#e03131"></i>รายงานสำนักงานเขต<b id="c-bmareport"></b></label>
+  <div class="f-sev"><span style="--c:#ff8787">เล็กน้อย / 5–10 ซม.</span><span style="--c:#e03131">ปานกลาง / 10–15</span><span style="--c:#a51111">หนัก / >15 ซม.</span></div>
+ </fieldset>
  <fieldset><legend>ฝน</legend>
   <label class="f-row"><input type="checkbox" id="f-rainrate" checked><i class="sw fill rainbar"></i>ความเข้มฝนรายชั่วโมง (ประมาณจากสถานี)<b id="c-rainrate"></b></label>
   <div class="f-rainscale"><span>1</span><span>2.5</span><span>5</span><span>10</span><span>20</span><span>35</span><span>50</span><span>80 มม./ชม.</span></div>
@@ -78,6 +83,7 @@
 
 <section id="about" class="panel about"><span class="eyebrow">แหล่งข้อมูลและข้อจำกัด</span><h2>ข้อมูลมาจากไหน</h2>
 <ul class="sources">
+ <li><b>ถนนน้ำท่วมทางการ กทม.:</b> <a href="https://now.bangkok.go.th/flood-alert.html" target="_blank" rel="noreferrer">now.bangkok.go.th/flood-alert</a> — ถนนที่ระบบตรวจวัดน้ำท่วมถนนพบน้ำ (ระดับ ซม. และช่วงที่รถติด/ปิดถนน) และรายงานของสำนักงานเขต (ระดับหนัก/ปานกลาง/เล็กน้อย) อัปเดตตามรอบของ กทม. รายงานที่ กทม. ไม่ระบุตำแหน่งวางไว้กลางเขต</li>
  <li><b>รายงานประชาชน:</b> <a href="https://www.traffy.in.th/" target="_blank" rel="noreferrer">Traffy Fondue</a> (กรุงเทพมหานคร) คัดเฉพาะเรื่องน้ำท่วม ลบเบอร์โทร/อีเมลก่อนแสดง เป็นเรื่องร้องเรียนที่ยังไม่ได้ตรวจสอบภาคสนาม</li>
  <li><b>โซเชียล:</b> โพสต์สาธารณะบน Bluesky ที่พูดถึงน้ำท่วม • X, Facebook, Instagram และ TikTok ไม่มีช่องทางค้นหาสาธารณะที่อนุญาต จึงไม่ได้ดึงโดยตรง (บางโพสต์จากเพจสำนักข่าวมาทาง Google News)</li>
  <li><b>ข่าว:</b> RSS ของมติชน ข่าวสด ประชาชาติธุรกิจ ไทยรัฐ เดลินิวส์ Bangkok Post และ Google News • แสดงหัวข่าวพร้อมลิงก์ต้นฉบับ</li>

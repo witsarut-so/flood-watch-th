@@ -85,6 +85,47 @@ async function rainRate(){
  return normalize(await get(TW+'rain_24h'),'rain',[97,5,106,21]).filter(s=>s.rain1hMm!==null&&s.rain1hMm>=0&&s.rain1hMm<300&&fresh(s.observedAt,2)).map(s=>[+s.lat.toFixed(4),+s.lng.toFixed(4),s.rain1hMm,s.rain24hMm??null]);
 }
 
+// Bangkok's official flood-alert page (now.bangkok.go.th/flood-alert.html). Its data are JS constants in the page:
+// ROADS (roads where the BMA road sensors read water, with Google-traffic closure length), GEO (their segments)
+// and REPORTS (district-office report file: level H/M/L, depth text, geometry matched to OSM by the BMA page).
+const BMA_ALERT='https://now.bangkok.go.th/flood-alert.html';
+const TH_MONTH={'ม.ค.':1,'ก.พ.':2,'มี.ค.':3,'เม.ย.':4,'พ.ค.':5,'มิ.ย.':6,'ก.ค.':7,'ส.ค.':8,'ก.ย.':9,'ต.ค.':10,'พ.ย.':11,'ธ.ค.':12};
+// Read `const NAME = {...}` / `[...]` from page source: skips strings, drops comments and trailing commas, then JSON.parse.
+export function jsConst(src,name){
+ const m=src.match(new RegExp(`const ${name}\\s*=\\s*([\\[{])`));if(!m)return null;
+ let i=m.index+m[0].length-1,depth=0,out='',q=null;
+ for(;i<src.length;i++){const c=src[i];
+  if(q){out+=c;if(c==='\\'){out+=src[++i];continue;}if(c===q)q=null;continue;}
+  if(c==='"'||c==="'"){q=c;out+=c;continue;}
+  if(c==='/'&&src[i+1]==='/'){while(i<src.length&&src[i]!=='\n')i++;continue;}
+  out+=c;if(c==='['||c==='{')depth++;else if((c===']'||c==='}')&&--depth===0)break;}
+ return JSON.parse(out.replace(/,\s*([}\]])/g,'$1'));
+}
+function thaiStamp(text){const m=text.match(/อัปเดต\s*(\d{1,2}):(\d{2})\s*น\.\s*(\d{1,2})\s*([ก-๙.]+)\s*(\d{4})/);if(!m||!TH_MONTH[m[4]])return null;const y=+m[5]-543,pad=n=>String(n).padStart(2,'0');return new Date(`${y}-${pad(TH_MONTH[m[4]])}-${pad(m[3])}T${pad(m[1])}:${m[2]}:00+07:00`).toISOString();}
+// [lat,lng] | [[lat,lng],...] | [[[lat,lng],...],...] -> list of lines
+function asLines(g){if(!Array.isArray(g)||!g.length)return [];if(typeof g[0]==='number')return [[g]];if(typeof g[0][0]==='number')return [g];return g.filter(l=>Array.isArray(l)&&Array.isArray(l[0]));}
+export async function bmaFloodAlert(g,idx){
+ const html=await get(BMA_ALERT,'text',30000);const at=thaiStamp(html.replace(/<[^>]+>/g,' '));
+ const roads=jsConst(html,'ROADS')||[],geo=jsConst(html,'GEO')||{},rep=jsConst(html,'REPORTS')||{items:[]};
+ const ROAD_LEVEL={R:'น้ำสูงเกิน 15 ซม.',r:'10–15 ซม.',a:'5–10 ซม.'},REP_LEVEL={H:'หนัก',M:'ปานกลาง',L:'เล็กน้อย'};
+ const out=[];
+ for(const r of roads){const lines=geo[r.n]||[];const p=lines[0]?.[0]||null;
+  out.push({id:'bma-road:'+r.n,kind:'official',subkind:'bma-road',source:'ระบบตรวจวัดน้ำท่วมถนน กทม. (now.bangkok.go.th)',sourceUrl:BMA_ALERT,at,province:'กรุงเทพฯ',lat:p?.[0]??null,lng:p?.[1]??null,precision:'point',
+   title:`${r.n}: น้ำ ${r.m} ซม. (${ROAD_LEVEL[r.l]||r.l}) • เขต${r.d}`,detail:r.s,level:r.l,depthCm:r.m,closedM:r.g||0,
+   sensors:(r.k||[]).map(k=>({code:k[0],where:k[1],cm:k[2],maxCm:k[4],segment:k[6]})),lines});}
+ const repAt=rep.time&&at?new Date(at.slice(0,11)+rep.time+':00+07:00').toISOString():at;
+ // Reports the BMA page could not place (g=null): try our OSM name matcher within the district, else the district centre.
+ const district=name=>(g?.districtsByName.get(name)||[]).find(p=>p.province==='กรุงเทพฯ');
+ (rep.items||[]).forEach((x,n)=>{let lines=asLines(x.g),p=lines[0]?.[0]||null,matched=null;const dc=district(x.d);
+  // "ซอยย่อย ถ.X (ถนนหลักไม่ท่วม)" means side streets, not road X itself: never draw the named road for these
+  const sideStreets=/ซอยย่อย|ซอยแยก|สายรอง|ทั้งหมด|ไม่ท่วม/.test(x.n+' '+(x.seg||''));
+  if(!p&&dc&&idx&&!sideStreets){matched=matchNamed(`${x.n.replace(/^ปาก/,'')} ${x.seg||''}`,idx,{places:[{province:'กรุงเทพฯ',short:x.d,lat:dc.lat,lng:dc.lng,precision:'district'}]}).find(m=>m.drawn);if(matched){lines=matched.lines;p=lines[0]?.[Math.floor(lines[0].length/2)]||[matched.lat,matched.lng];}}
+  if(!p&&dc)p=[dc.lat,dc.lng];
+  out.push({id:`bma-report:${n}:${x.n}`,kind:'official',subkind:'bma-report',source:`รายงานสำนักงานเขต กทม. (${rep.file||'ไฟล์สรุป'})`,sourceUrl:BMA_ALERT,at:repAt,province:'กรุงเทพฯ',lat:p?.[0]??null,lng:p?.[1]??null,precision:(x.u||(!x.g&&!matched))?'district':'point',
+   title:`${x.n}${x.seg?` (${x.seg})`:''} • เขต${x.d} • ระดับ${REP_LEVEL[x.lv]||x.lv}`,depthText:x.w,level:x.lv,approximate:!!x.u||!x.g,placedBy:x.g?'bma':matched?'osm-name':'district-centre',geomKind:x.k,lines:x.k==='point'?[]:lines});});
+ return out;
+}
+
 // Social: Bluesky public search (no key). X, Facebook, Instagram and TikTok have no public search API;
 // their posts only arrive indirectly (e.g. outlets' Facebook posts surfacing in Google News).
 const BSKY='https://api.bsky.app/xrpc/app.bsky.feed.searchPosts';
@@ -160,12 +201,12 @@ function refresh(){
   gaz??=buildGazetteer(JSON.parse(await readFile(new URL('./data/gazetteer/th-admin.json',import.meta.url))).places);
   const errors=[],fetchedAt=new Date().toISOString(),idx=await namedIndex();
   if(!idx)errors.push({source:'named',error:'ยังไม่มีฐานชื่อถนน/หมู่บ้าน (รัน model/build_static.py)'});
-  const tasks={traffy:()=>traffy(errors,idx),roadSensors,heavyRain,dams,canalFlow,canalLevels,waterGates,social:()=>bluesky(gaz,idx,errors),news:()=>news(gaz,errors,idx)};
+  const tasks={bmaAlert:()=>bmaFloodAlert(gaz,idx),traffy:()=>traffy(errors,idx),roadSensors,heavyRain,dams,canalFlow,canalLevels,waterGates,social:()=>bluesky(gaz,idx,errors),news:()=>news(gaz,errors,idx)};
   const results=await Promise.allSettled(Object.values(tasks).map(f=>f()));const sources={};const items=[];
   Object.keys(tasks).forEach((name,i)=>{const r=results[i];if(r.status==='fulfilled'){items.push(...r.value);sources[name]={ok:true,count:r.value.length};}else{sources[name]={ok:false,count:0,error:r.reason.message};errors.push({source:name,error:r.reason.message});}});
   let rain=[];try{rain=await rainRate();sources.rainRate={ok:true,count:rain.length};}catch(e){sources.rainRate={ok:false,count:0,error:e.message};errors.push({source:'rainRate',error:e.message});}
   const out={fetchedAt,windowHours:{news:HOURS,social:HOURS,citizen:TRAFFY_HOURS,roadSensors:48},sources,errors,provinces:summarise(items,gaz),items,rainRate:{fields:['lat','lng','mm1h','mm24h'],stations:rain},
-   notes:['รายงานประชาชน (Traffy) เป็นเรื่องร้องเรียน ไม่ได้ตรวจสอบภาคสนาม และครอบคลุมกรุงเทพฯ เป็นหลัก','ข่าวถูกจัดตำแหน่งจากชื่อสถานที่ในข้อความ ละเอียดสุดระดับตำบล/แขวง ไม่ใช่จุดเกิดเหตุจริง','ความลึกจากข่าว/รายงานเป็นตัวเลขที่ผู้เขียนระบุ หรือประมาณจากคำอย่าง "ระดับเข่า" (ทำเครื่องหมายว่าประมาณ)','เซนเซอร์ถนนและเขื่อนอาจล่าช้า ดูเวลาของแต่ละรายการ','ชื่อถนน/ซอย/หมู่บ้านถูกจับคู่กับ OSM เฉพาะเมื่อบริบทชัดเจน ถนนยาวถูกตัดเฉพาะช่วงใกล้พื้นที่ที่ระบุ','โซเชียล: Bluesky เท่านั้น (X, Facebook, Instagram, TikTok ไม่มี API ค้นหาสาธารณะ)','อัตราการสูบของสถานีสูบน้ำไม่มีข้อมูลสาธารณะ แสดงเฉพาะอัตราการไหลในคลองและระดับน้ำประตูระบายน้ำ']};
+   notes:['รายงานประชาชน (Traffy) เป็นเรื่องร้องเรียน ไม่ได้ตรวจสอบภาคสนาม และครอบคลุมกรุงเทพฯ เป็นหลัก','ข่าวถูกจัดตำแหน่งจากชื่อสถานที่ในข้อความ ละเอียดสุดระดับตำบล/แขวง ไม่ใช่จุดเกิดเหตุจริง','ความลึกจากข่าว/รายงานเป็นตัวเลขที่ผู้เขียนระบุ หรือประมาณจากคำอย่าง "ระดับเข่า" (ทำเครื่องหมายว่าประมาณ)','เซนเซอร์ถนนและเขื่อนอาจล่าช้า ดูเวลาของแต่ละรายการ','ชื่อถนน/ซอย/หมู่บ้านถูกจับคู่กับ OSM เฉพาะเมื่อบริบทชัดเจน ถนนยาวถูกตัดเฉพาะช่วงใกล้พื้นที่ที่ระบุ','โซเชียล: Bluesky เท่านั้น (X, Facebook, Instagram, TikTok ไม่มี API ค้นหาสาธารณะ)','ถนนน้ำท่วมทางการของ กทม. มาจาก now.bangkok.go.th (จุดวัด + รายงานสำนักงานเขต) อัปเดตตามรอบของ กทม.','อัตราการสูบของสถานีสูบน้ำไม่มีข้อมูลสาธารณะ แสดงเฉพาะอัตราการไหลในคลองและระดับน้ำประตูระบายน้ำ']};
   await mkdir(new URL('./data/evidence/',import.meta.url),{recursive:true});await writeFile(new URL('./data/evidence/latest.json',import.meta.url),JSON.stringify(out));
   cache=out;return out;})().finally(()=>{pending=null;});
  return pending;

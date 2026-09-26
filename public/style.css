@@ -67,3 +67,4 @@ footer{max-width:1600px;margin:0 auto;padding:0 max(16px,3%) 28px;font-size:11px
 @keyframes logo-blink{0%,90%,100%{transform:scaleY(1)}95%{transform:scaleY(.12)}}
 @media (prefers-reduced-motion:reduce){.logo-bob,.logo-wave1,.logo-wave2,.logo-eyes ellipse{animation:none}}
 @media(max-width:760px){.brand .logo{width:32px;height:32px}}
+.sw.sevbar{background:linear-gradient(90deg,#ff8787,#e03131,#a51111);height:5px}.f-sev{display:flex;gap:4px;margin:0 0 6px 26px;font-size:9.5px;color:#7b8d88}.f-sev span{flex:1;border-top:4px solid var(--c);padding-top:2px}.popup-list{margin:4px 0 0;padding-left:16px}
