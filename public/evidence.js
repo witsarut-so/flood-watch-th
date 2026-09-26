@@ -15,7 +15,7 @@ const geoKind={road:'ถนน/ซอย',soi:'ซอย',village:'หมู่�
 const BMA_COLOR={R:'#a51111',r:'#e03131',a:'#ff8787',H:'#a51111',M:'#e03131',L:'#ff8787'};
 function bmaPopup(i){
  const sensors=(i.sensors||[]).map(s=>`<li>${esc(s.code)} ${esc(s.where)}: ${esc(s.cm)} ซม. (สูงสุดรอบนี้ ${esc(s.maxCm)} ซม.)</li>`).join('');
- return `<b>${esc(i.title)}</b><br><small>${esc(i.source)} • อัปเดต ${esc(thaiTime(i.at))} (${esc(ago(i.at))})${i.via?` • ดึงผ่าน${esc(i.via)}`:''}${i.stale?` • ข้อมูลรอบก่อน (ดึงล่าสุด ${esc(thaiTime(i.fetchedAt))})`:''}</small>${i.detail?`<br>ช่วง: ${esc(i.detail)}`:''}${i.depthText?`<br>ความลึกตามรายงาน: ${esc(i.depthText)}`:''}${i.closedM?`<br>Google แสดงรถติด/ปิดถนนต่อเนื่อง ~${esc(i.closedM)} ม.`:''}${sensors?`<ul class="popup-list">${sensors}</ul>`:''}${i.approximate?`<br><small>ตำแหน่งโดยประมาณ${i.placedBy==='district-centre'?' (กลางเขต เพราะรายงานไม่ระบุตำแหน่ง)':i.placedBy==='osm-name'?' (จับคู่ชื่อถนนกับ OSM)':' (แสดงทั้งช่วงในเขต)'}</small>`:''}<br><a href="${safeUrl(i.sourceUrl)}" target="_blank" rel="noreferrer">เปิดหน้าเตือนภัย กทม. ↗</a>`;
+ return `<b>${esc(i.title)}</b><br><small>${esc(i.source)} • อัปเดต ${esc(thaiTime(i.at))} (${esc(ago(i.at))})${i.via?` • ดึงผ่าน${esc(i.via)}`:''}${i.stale?` • ข้อมูลรอบก่อน (ดึงล่าสุด ${esc(thaiTime(i.fetchedAt))})`:''}</small>${i.detail?`<br>ช่วง: ${esc(i.detail)}`:''}${i.depthText?`<br>ความลึกตามรายงาน: ${esc(i.depthText)}`:''}${i.closedM?`<br>Google แสดงรถติด/ปิดถนนต่อเนื่อง ~${esc(i.closedM)} ม.`:''}${sensors?`<ul class="popup-list">${sensors}</ul>`:''}${i.approximate?`<br><small>ตำแหน่งโดยประมาณ: ${i.placedBy==='district-centre'?'รายงานไม่ระบุตำแหน่ง จึงวางไว้กลางเขต':i.placedBy==='osm-name'?'จับคู่ชื่อถนนกับ OSM':'รายงานไม่ระบุช่วง จึงแสดงถนนเส้นนี้เฉพาะในเขตที่รายงาน ไม่ได้แปลว่าท่วมตลอดเส้น'}</small>`:i.clipped==='soi'?'<br><small>แสดงเฉพาะช่วงถนนใกล้ปากซอยที่รายงานระบุ</small>':''}<br><a href="${safeUrl(i.sourceUrl)}" target="_blank" rel="noreferrer">เปิดหน้าเตือนภัย กทม. ↗</a>`;
 }
 function popup(i){
  const depth=i.depthCm!=null&&i.kind!=='sensor'?`<br>ความลึกที่ระบุ: ${esc(i.depthCm)} ซม.${i.depthEstimated?' (ประมาณจากคำบรรยาย)':''}`:i.kind==='sensor'&&!i.subkind?`<br>ค่าที่วัดได้: ${esc(i.depthCm)} ซม.`:'';
@@ -46,7 +46,11 @@ function paintEvidence(){
   const style={renderer:evidenceRenderer,pane:'evidence',color:'#fff',weight:1.2,fillColor:evidenceKinds[k],fillOpacity:.9};
   if(k==='news'||(k==='social'&&!i.precision)){for(const p of (i.places||[]).slice(0,5))(k==='social'?L.marker([p.lat,p.lng],{pane:'evidence',icon:icon('social','💬')}):L.circleMarker([p.lat,p.lng],{...style,radius:p.precision==='province'?7:5.5,fillOpacity:.6})).bindPopup(()=>popup(i),{maxWidth:300}).addTo(evidenceLayers[k]);continue;}
   if(k==='bmaroad'||k==='bmareport'){const col=BMA_COLOR[i.level]||'#e03131',dash=k==='bmareport'?'7 5':null,layer=evidenceLayers[k];
-   for(const l of i.lines||[])if(l.length>1){L.polyline(l,{renderer:evidenceRenderer,color:'#fff',weight:9,opacity:.85,interactive:false}).addTo(layer);L.polyline(l,{renderer:evidenceRenderer,color:col,weight:5,opacity:.95,dashArray:dash,lineCap:'round'}).bindPopup(()=>bmaPopup(i),{maxWidth:320}).addTo(layer);}
+   // district-level approximations (report named a road but no segment) are faint and off by default
+   const approx=k==='bmareport'&&i.approximate;
+   if(!approx||$('f-bmaapprox').checked)for(const l of i.lines||[])if(l.length>1){
+    if(approx){L.polyline(l,{renderer:evidenceRenderer,color:col,weight:3,opacity:.45,dashArray:'2 7',lineCap:'round'}).bindPopup(()=>bmaPopup(i),{maxWidth:320}).addTo(layer);continue;}
+    L.polyline(l,{renderer:evidenceRenderer,color:'#fff',weight:9,opacity:.85,interactive:false}).addTo(layer);L.polyline(l,{renderer:evidenceRenderer,color:col,weight:5,opacity:.95,dashArray:dash,lineCap:'round'}).bindPopup(()=>bmaPopup(i),{maxWidth:320}).addTo(layer);}
    if(Number.isFinite(i.lat))L.circleMarker([i.lat,i.lng],{renderer:evidenceRenderer,pane:'evidence',radius:k==='bmaroad'?6:5,color:'#fff',weight:2,fillColor:col,fillOpacity:1,dashArray:null}).bindPopup(()=>bmaPopup(i),{maxWidth:320}).addTo(layer);
    continue;}
   if(!Number.isFinite(i.lat))continue;
@@ -111,7 +115,7 @@ async function loadEvidence(){
  catch(err){$('ev-status').textContent='โหลดข้อมูลไม่สำเร็จ • จะลองใหม่อัตโนมัติ';}
  setTimeout(loadEvidence,document.hidden?600000:300000);
 }
-onFilter(['f-bmaroad','f-bmareport','f-citizen','f-social','f-road','f-rain','f-dam','f-news','f-flow','f-canal','f-gate','f-mentions','f-citizen-hours','f-road-wet'],paintEvidence);
+onFilter(['f-bmaroad','f-bmareport','f-bmaapprox','f-citizen','f-social','f-road','f-rain','f-dam','f-news','f-flow','f-canal','f-gate','f-mentions','f-citizen-hours','f-road-wet'],paintEvidence);
 onFilter(['f-rainrate'],paintRain);
 if(map){let t,wasNear=map.getZoom()>=11;map.on('moveend',()=>{clearTimeout(t);t=setTimeout(paintRain,200);});map.on('zoomend',()=>{const near=map.getZoom()>=11;if(near!==wasNear){wasNear=near;paintEvidence();}});}
 loadEvidence();

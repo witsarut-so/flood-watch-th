@@ -5,7 +5,7 @@
 // Nothing is interpolated; every item keeps its own timestamp, source and location precision.
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {gunzipSync} from 'node:zlib';
-import {buildNamedIndex,matchNamed} from './named-match.mjs';
+import {buildNamedIndex,matchNamed,normName} from './named-match.mjs';
 import {normalize} from './model-inputs.mjs';
 import {parseRss,stripTags,relevance,extractPlaces,extractDepth,extractFacts,redact,buildGazetteer,titleKey} from './evidence-text.mjs';
 
@@ -116,6 +116,32 @@ export function jsConst(src,name){
  return JSON.parse(out.replace(/,\s*([}\]])/g,'$1'));
 }
 function thaiStamp(text){const m=text.match(/อัปเดต\s*(\d{1,2}):(\d{2})\s*น\.\s*(\d{1,2})\s*([ก-๙.]+)\s*(\d{4})/);if(!m||!TH_MONTH[m[4]])return null;const y=+m[5]-543,pad=n=>String(n).padStart(2,'0');return new Date(`${y}-${pad(TH_MONTH[m[4]])}-${pad(m[3])}T${pad(m[1])}:${m[2]}:00+07:00`).toISOString();}
+// District-report geometry from the BMA page is often too broad: a report with no segment is drawn along the whole
+// road, even outside the reporting district (e.g. เพชรเกษม reported by หนองแขม drawn through บางแค). We clip:
+//  - "บางช่วง / บริเวณ ซ.25 / ซ.39" -> only the road within 250 m of those sois (OSM names)
+//  - otherwise, unspecified segments -> only the part inside the reporting district (OSM khet boundary)
+let khet;
+async function khetPolygons(){if(khet)return khet;khet=new Map();try{for(const f of JSON.parse(await readFile(new URL('./data/boundary/bkk-districts.geojson',import.meta.url))).features)khet.set(f.properties.name,f.geometry.coordinates.map(poly=>poly[0]));}catch{}return khet;}
+function inRings(lat,lng,rings){let inside=false;for(const r of rings)for(let i=0,j=r.length-1;i<r.length;j=i++){const [xi,yi]=r[i],[xj,yj]=r[j];if((yi>lat)!==(yj>lat)&&lng<(xj-xi)*(lat-yi)/(yj-yi)+xi)inside=!inside;}return inside;}
+// Roads that form a district border sit on the edge of the khet polygon: accept points within 150 m of it too.
+function nearRings(lat,lng,rings,km){const k=Math.cos(lat*Math.PI/180);for(const r of rings)for(let i=1;i<r.length;i++){const ax=(r[i-1][0]-lng)*111.32*k,ay=(r[i-1][1]-lat)*111.32,bx=(r[i][0]-lng)*111.32*k,by=(r[i][1]-lat)*111.32,dx=bx-ax,dy=by-ay,t=Math.max(0,Math.min(1,-(ax*dx+ay*dy)/((dx*dx+dy*dy)||1)));if(Math.hypot(ax+t*dx,ay+t*dy)<=km)return true;}return false;}
+const inDistrict=(q,rings)=>inRings(q[0],q[1],rings)||nearRings(q[0],q[1],rings,.15);
+// BMA lines have vertices hundreds of metres apart; add points every ~25 m so clipping has something to keep.
+function densify(lines,stepKm=.025){return lines.map(l=>{const out=[l[0]];for(let i=1;i<l.length;i++){const n=Math.max(1,Math.ceil(kmBetween(l[i-1],l[i])/stepKm));for(let k=1;k<=n;k++)out.push([+(l[i-1][0]+(l[i][0]-l[i-1][0])*k/n).toFixed(5),+(l[i-1][1]+(l[i][1]-l[i-1][1])*k/n).toFixed(5)]);}return out;});}
+function thinLine(l,stepKm=.02){const out=[l[0]];for(const p of l.slice(1,-1))if(kmBetween(out.at(-1),p)>=stepKm)out.push(p);if(l.length>1)out.push(l.at(-1));return out;}
+function keepRuns(lines,keep){const out=[];for(const l of lines){let cur=[];for(const p of l){if(keep(p))cur.push(p);else{if(cur.length>1)out.push(cur);cur=[];}}if(cur.length>1)out.push(cur);}return out;}
+const kmBetween=(a,b)=>Math.hypot((a[0]-b[0])*111.32,(a[1]-b[1])*111.32*Math.cos(a[0]*Math.PI/180));
+function soiAnchors(x,idx,rings,line){
+ const text=`${x.n} ${x.seg||''}`;if(!/บางช่วง|บริเวณ|ช่วง\s*ซ/.test(text))return null;
+ const road=x.n.replace(/^(ถ\.|ถนน)\s*/,'').replace(/\s*\(.*$/,'').trim(),pts=[];
+ // anchor = the soi's mouth: its vertex closest to the reported road line
+ const flat=line.flat();
+ for(const m of text.matchAll(/ซ(?:อย|\.)\s*(\d+(?:\/\d+)?)/g))for(const f of idx?.byKey.get(normName(`ซอย${road} ${m[1]}`))||[]){
+  let best=null,bd=Infinity;for(const l of f.lines)for(const p of l){if(rings&&!inDistrict(p,rings))continue;for(let i=0;i<flat.length;i+=4){const d=kmBetween(p,flat[i]);if(d<bd){bd=d;best=p;}}}
+  if(best&&bd<=.3)pts.push(best);}
+ return pts.length?pts:null;
+}
+
 // [lat,lng] | [[lat,lng],...] | [[[lat,lng],...],...] -> list of lines
 function asLines(g){if(!Array.isArray(g)||!g.length)return [];if(typeof g[0]==='number')return [[g]];if(typeof g[0][0]==='number')return [g];return g.filter(l=>Array.isArray(l)&&Array.isArray(l[0]));}
 // The BMA server only answers from Thai networks; elsewhere (GitHub runners) the last good pull is reused, with its time.
@@ -136,14 +162,18 @@ export async function bmaFloodAlert(g,idx){
    sensors:(r.k||[]).map(k=>({code:k[0],where:k[1],cm:k[2],maxCm:k[4],segment:k[6]})),lines});}
  const repAt=rep.time&&at?new Date(at.slice(0,11)+rep.time+':00+07:00').toISOString():at;
  // Reports the BMA page could not place (g=null): try our OSM name matcher within the district, else the district centre.
- const district=name=>(g?.districtsByName.get(name)||[]).find(p=>p.province==='กรุงเทพฯ');
- (rep.items||[]).forEach((x,n)=>{let lines=asLines(x.g),p=lines[0]?.[0]||null,matched=null;const dc=district(x.d);
+ const district=name=>(g?.districtsByName.get(name)||[]).find(p=>p.province==='กรุงเทพฯ');const polys=await khetPolygons();
+ (rep.items||[]).forEach((x,n)=>{let lines=asLines(x.g),p=lines[0]?.[0]||null,matched=null,clip=null;const dc=district(x.d),rings=polys.get(x.d);
+  if(lines.length&&x.k!=='point'){const dense=densify(lines),anchors=soiAnchors(x,idx,rings,dense);
+   if(anchors){const kept=keepRuns(dense,q=>anchors.some(a=>kmBetween(a,q)<=.25));if(kept.length){lines=kept.map(l=>thinLine(l));clip='soi';}}
+   if(!clip&&(x.u||!x.seg)&&rings){const kept=keepRuns(dense,q=>inDistrict(q,rings));if(kept.length){clip='district';lines=kept.map(l=>thinLine(l,.05));}else{lines=[];clip='outside-district';}}
+   p=lines[0]?.[Math.floor(lines[0].length/2)]||null;}
   // "ซอยย่อย ถ.X (ถนนหลักไม่ท่วม)" means side streets, not road X itself: never draw the named road for these
   const sideStreets=/ซอยย่อย|ซอยแยก|สายรอง|ทั้งหมด|ไม่ท่วม/.test(x.n+' '+(x.seg||''));
   if(!p&&dc&&idx&&!sideStreets){matched=matchNamed(`${x.n.replace(/^ปาก/,'')} ${x.seg||''}`,idx,{places:[{province:'กรุงเทพฯ',short:x.d,lat:dc.lat,lng:dc.lng,precision:'district'}]}).find(m=>m.drawn);if(matched){lines=matched.lines;p=lines[0]?.[Math.floor(lines[0].length/2)]||[matched.lat,matched.lng];}}
   if(!p&&dc)p=[dc.lat,dc.lng];
-  out.push({id:`bma-report:${n}:${x.n}`,kind:'official',subkind:'bma-report',source:`รายงานสำนักงานเขต กทม. (${rep.file||'ไฟล์สรุป'})`,sourceUrl:BMA_ALERT,at:repAt,province:'กรุงเทพฯ',lat:p?.[0]??null,lng:p?.[1]??null,precision:(x.u||(!x.g&&!matched))?'district':'point',
-   title:`${x.n}${x.seg?` (${x.seg})`:''} • เขต${x.d} • ระดับ${REP_LEVEL[x.lv]||x.lv}`,depthText:x.w,level:x.lv,approximate:!!x.u||!x.g,placedBy:x.g?'bma':matched?'osm-name':'district-centre',geomKind:x.k,lines:x.k==='point'?[]:lines});});
+  out.push({id:`bma-report:${n}:${x.n}`,kind:'official',subkind:'bma-report',source:`รายงานสำนักงานเขต กทม. (${rep.file||'ไฟล์สรุป'})`,sourceUrl:BMA_ALERT,at:repAt,province:'กรุงเทพฯ',lat:p?.[0]??null,lng:p?.[1]??null,precision:(clip==='soi'||(x.g&&!x.u&&x.seg))?'point':'district',
+   title:`${x.n}${x.seg?` (${x.seg})`:''} • เขต${x.d} • ระดับ${REP_LEVEL[x.lv]||x.lv}`,depthText:x.w,level:x.lv,approximate:clip!=='soi'&&(!!x.u||!x.g||!x.seg),clipped:clip,placedBy:clip==='soi'?'soi':x.g?'bma':matched?'osm-name':'district-centre',geomKind:x.k,lines:x.k==='point'?[]:lines});});
  return out;
 }
 
