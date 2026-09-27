@@ -87,3 +87,21 @@ export function extractPlaces(text,g){
 export function extractPlacesSocial(text,g){const body=text.replace(/#\S+/g,' ');const p=extractPlaces(body,g);return p.length?p:extractPlaces(text,g);}
 
 export const titleKey=t=>t.toLowerCase().replace(/[\s"'“”‘’!?,.:;()\-–—|]/g,'').slice(0,48);
+
+// Chao Phraya Dam release figures in news text. Each hit keeps its phrase and a type:
+//  actual  "ระบาย 1,950 ลบ.ม./วินาที", "เพิ่มจาก 1,750 เป็น 1,850" (the new value)
+//  cap     "ไม่เกิน 2,000", "คุมไม่ให้เกิน"
+//  plan    "จะ/คาดว่า/เตรียม/อาจ … 2,400", or a range (2,000-2,500)
+// Only numbers within ~80 characters after a mention of the dam are read; plausible range 100-6,000 m3/s.
+const DAM=/เขื่อนเจ้าพระยา|ท้ายเขื่อน(?:เจ้าพระยา)?/g;
+export function extractDamRelease(text){
+ const out=[],seen=new Set();
+ for(const m of text.matchAll(DAM)){
+  const win=text.slice(m.index,m.index+160);
+  const from=win.match(/จาก\s*(\d[\d,]*)\s*(?:ลบ\.ม\.|ลูกบาศก์เมตร)?[^\d]{0,12}?เป็น\s*(\d[\d,]*)/);
+  const cands=from?[[from[2],'actual',from[0]]]:[...win.matchAll(/((?:ไม่เกิน|ไม่ให้เกิน|สูงสุด|จะ|คาดว่า|คาดการณ์|เตรียม|อาจ|ปรับ(?:เพิ่ม)?(?:การระบาย)?(?:น้ำ)?เป็น|เพิ่ม(?:การระบาย)?(?:น้ำ)?เป็น|ระบาย(?:น้ำ)?|เขื่อนเจ้าพระยา)[^\d\n]{0,25}?)(\d[\d,]*)(?:\s*[-–]\s*(\d[\d,]*))?\s*(?:ลบ\.ม\.|ลูกบาศก์เมตร)/g)].map(x=>{
+   const lead=x[1],v=x[3]||x[2];const type=/ไม่เกิน|ไม่ให้เกิน|สูงสุด/.test(lead)?'cap':(/จะ|คาดว่า|คาดการณ์|เตรียม|อาจ/.test(lead)||x[3])?'plan':'actual';return [v,type,x[0]];});
+  for(const [v,type,phrase] of cands){const n=Number(String(v).replace(/,/g,''));if(!(n>=100&&n<=6000))continue;const k=n+type;if(seen.has(k))continue;seen.add(k);out.push({m3s:n,type,phrase:phrase.trim().slice(0,90)});}
+ }
+ return out;
+}

@@ -69,3 +69,5 @@ footer{max-width:1600px;margin:0 auto;padding:0 max(16px,3%) 28px;font-size:11px
 @media(max-width:760px){.brand .logo{width:32px;height:32px}}
 .sw.sevbar{background:linear-gradient(90deg,#ff8787,#e03131,#a51111);height:5px}.f-sev{display:flex;gap:4px;margin:0 0 6px 26px;font-size:9.5px;color:#7b8d88}.f-sev span{flex:1;border-top:4px solid var(--c);padding-top:2px}.popup-list{margin:4px 0 0;padding-left:16px}
 .f-window{display:block;font-size:11px;line-height:1.5;color:#6b7f79}.f-window.warn{color:#9c5b00;background:#fff4e0;padding:4px 6px;border-radius:6px}
+.river-card{background:#eef6fb;border-radius:10px;padding:12px 14px;margin:10px 0}.river-card h3{margin:0 0 4px}.dam-chart{width:100%;height:auto;max-height:180px}
+.dam-legend{font-size:11px;color:#5f746e;display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;margin:4px 0 0}.dam-legend .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:-1px}.dot.actual{background:#1971c2}.dot.cap{background:#e8590c}.dot.plan{background:#adb5bd}.dam-legend .line{display:inline-block;width:18px;height:3px;background:#0b7285;margin-right:4px;vertical-align:2px}

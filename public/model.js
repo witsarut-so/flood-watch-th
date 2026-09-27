@@ -34,9 +34,28 @@ function describeModel(){
  const refRain=ref.scenarios[k].rainMeanTotalMm;
  $('model-window').textContent=`ใช้ฝน ${thaiTime(ref.startAt)} – ${thaiTime(ref.endAt)} (${ref.times.length} ชม.) เฉลี่ย ${refRain.toFixed(0)} มม.`+(refRain<20?' • ฝนช่วงนี้น้อย แบบจำลองจึงมีน้ำขังน้อย ไม่ได้แปลว่าน้ำที่ท่วมอยู่แล้วลดลง ดูข้อมูลจริงประกอบ':'');
  $('model-window').classList.toggle('warn',refRain<20);
+ drawRiver();
  const skipped=modelRun.domains.filter(d=>d.skipped);
  $('model-balance').textContent=liveDomains().map(d=>`${d.name}: ฝนเฉลี่ยสะสม ${d.scenarios[k].rainMeanTotalMm.toFixed(0)} มม. ใน ${d.times.length} ชม. จาก ${d.rainStations.length} สถานี • น้ำไหลออกขอบพื้นที่ ${(d.scenarios[k].balance.boundaryOutflowM3/1e6).toFixed(1)} ล้าน ลบ.ม. • สมดุลน้ำคลาดเคลื่อน ${(d.scenarios[k].balance.relativeResidual*100).toExponential(0)}%`).join(' | ')+(skipped.length?' | ไม่ได้คำนวณ: '+skipped.map(d=>`${d.name} (${d.skipped})`).join(', '):'');
 }
+// River card: news-reported Chao Phraya Dam release (points) and the lagged inflow the model used (line).
+function drawRiver(){
+ const d=liveDomains().find(x=>x.river),svg=$('dam-chart');if(!svg)return;svg.replaceChildren();
+ if(!d){$('river-text').textContent='รอบนี้ไม่มีข้อมูลแม่น้ำ';return;}
+ const rv=d.river,pts=(typeof evidenceData!=='undefined'&&evidenceData?.damRelease?.points)||rv.newsPoints||[];
+ $('river-text').textContent=rv.inflowM3s?`น้ำเข้าแม่น้ำ ${Math.min(...rv.inflowM3s).toLocaleString('th-TH')}–${Math.max(...rv.inflowM3s).toLocaleString('th-TH')} ลบ.ม./วินาที ตามอัตราระบายท้าย${rv.inflowFrom}ที่รายงานในข่าว หน่วง ${rv.lagHours} ชม. (ระยะเดินทางถึงขอบพื้นที่) • ร่องน้ำลึกสมมติ ${rv.channelDepthM} ม. • น้ำในร่องแม่น้ำไม่นับเป็นน้ำท่วม`:'ไม่พบตัวเลขอัตราระบายเขื่อนในข่าวช่วงนี้ แม่น้ำรับเฉพาะน้ำฝนในพื้นที่';
+ const ns='http://www.w3.org/2000/svg',el=(n,a)=>{const e=document.createElementNS(ns,n);for(const k in a)e.setAttribute(k,a[k]);return e;};
+ const inflow=(rv.inflowM3s||[]).map((q,i)=>[Date.parse(d.times[i])-rv.lagHours*3600000,q]);  // plotted at dam time
+ const all=[...pts.map(p=>[Date.parse(p.at),p.m3s]),...inflow];if(!all.length)return;
+ const t0=Math.min(...all.map(x=>x[0])),t1=Math.max(...all.map(x=>x[0]),t0+3600000),v0=Math.min(...all.map(x=>x[1]))*.9,v1=Math.max(...all.map(x=>x[1]))*1.05;
+ const X=t=>40+(t-t0)/(t1-t0)*550,Y=v=>140-(v-v0)/(v1-v0)*125;
+ for(const v of [v0,(v0+v1)/2,v1]){svg.append(el('line',{x1:40,x2:590,y1:Y(v),y2:Y(v),stroke:'#dde5e2'}));const tx=el('text',{x:36,y:Y(v)+4,'text-anchor':'end','font-size':10,fill:'#6b7f79'});tx.textContent=Math.round(v).toLocaleString('th-TH');svg.append(tx);}
+ for(const t of [t0,t1]){const tx=el('text',{x:X(t),y:156,'text-anchor':t===t0?'start':'end','font-size':10,fill:'#6b7f79'});tx.textContent=thaiTime(new Date(t).toISOString());svg.append(tx);}
+ if(inflow.length)svg.append(el('polyline',{points:inflow.map(([t,v])=>`${X(t)},${Y(v)}`).join(' '),fill:'none',stroke:'#0b7285','stroke-width':3,opacity:.8}));
+ const col={actual:'#1971c2',cap:'#e8590c',plan:'#adb5bd'};
+ for(const p of pts){const c=el('circle',{cx:X(Date.parse(p.at)),cy:Y(p.m3s),r:4,fill:col[p.type]||'#999',stroke:'#fff','stroke-width':1});const tt=el('title',{});tt.textContent=`${p.m3s.toLocaleString('th-TH')} ลบ.ม./วิ (${p.type==='actual'?'ระบายจริง':p.type==='cap'?'เพดาน':'แผน'}) • ${p.source} • ${thaiTime(p.at)}`;c.append(tt);svg.append(c);}
+}
+
 async function paintSimulation(){
  const token=++paintToken;if(!modelRun||!map)return;describeModel();
  if(!$('f-model').checked){floodGroup.clearLayers();return;}

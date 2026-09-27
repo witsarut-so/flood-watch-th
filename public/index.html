@@ -11,7 +11,7 @@
  <fieldset><legend>แบบจำลองน้ำขังจากฝน</legend>
   <label class="f-row"><input type="checkbox" id="f-model" checked><i class="sw line" style="--c:#9c36b5"></i>บริเวณ/ถนนที่แบบจำลองมีน้ำ</label>
   <div class="f-sub">
-   <label>การระบายน้ำ (สมมติฐาน)<select id="f-scenario"><option value="0">ไม่ระบาย (0 มม./ชม.)</option><option value="3" selected>กลาง (3 มม./ชม.)</option><option value="8">มาก (8 มม./ชม.)</option></select></label>
+   <label>การระบายน้ำ (สมมติฐาน)<select id="f-scenario"><option value="0">ไม่ระบาย (0 มม./ชม.)</option><option value="3" selected>กลาง (กทม. ตามกำลังสูบ 1,300 ลบ.ม./วิ ≈ 2.9 มม./ชม. • ที่อื่น 3)</option><option value="8">มาก (8 มม./ชม.)</option></select></label>
    <label>แสดงเมื่อลึกตั้งแต่<select id="f-mindepth"><option value="2">2 ซม.</option><option value="10">10 ซม.</option><option value="30">30 ซม.</option><option value="50">50 ซม.</option></select></label>
    <label>เวลา: <b id="f-time-label">–</b><input type="range" id="f-time" min="0" max="0" value="0"></label><small id="model-window" class="f-window"></small>
    <div class="f-depth"><span style="--c:#e599f7">2–10</span><span style="--c:#cc5de8">10–30</span><span style="--c:#9c36b5">30–50</span><span style="--c:#5f0f7a">≥50 ซม.</span></div>
@@ -69,14 +69,15 @@
 <div class="ev-grid"><div><h3>จังหวัดที่มีหลักฐานมากที่สุด <small>(กดเพื่อซูม)</small></h3><div class="table-scroll"><table class="ev-table"><thead><tr><th>จังหวัด</th><th>ข่าว</th><th>โซเชียล</th><th>ประชาชน</th><th>สถานีฝนหนัก</th><th>เซนเซอร์ถนน</th><th>ล่าสุด</th></tr></thead><tbody id="ev-provinces"></tbody></table></div></div><div><h3>ข่าวและโพสต์ล่าสุด <small>(กดเพื่อดูสถานที่บนแผนที่)</small></h3><ul id="ev-news-list" class="ev-news"></ul></div></div></section>
 
 <section id="model" class="panel model-panel" aria-labelledby="model-title"><span class="eyebrow">แบบจำลองทดลอง · 10 จังหวัด</span><h2 id="model-title">บริเวณที่อาจมีน้ำขังจากฝนสะสม <span class="pill">ยังไม่สอบเทียบ</span></h2>
-<p>คำนวณการไหลและการขังของน้ำฝนย้อนหลังสูงสุด 24 ชั่วโมง บนภูมิประเทศ 100 ม. (กาญจนบุรี 250 ม.) น้ำไหลออกที่ขอบพื้นที่ได้ • ระบบรันใหม่อัตโนมัติทุก 2 ชั่วโมง • ใช้ประกอบการตัดสินใจ ไม่ใช่ประกาศทางการ</p>
+<p>คำนวณการไหลและการขังของน้ำฝนย้อนหลังสูงสุด 36 ชั่วโมง บนภูมิประเทศ 100 ม. (กาญจนบุรี 250 ม.) รวมน้ำจากแม่น้ำเจ้าพระยาตามอัตราระบายท้ายเขื่อนที่รายงานในข่าว และกำลังสูบน้ำของ กทม. • ระบบรันใหม่อัตโนมัติทุก 2 ชั่วโมง • เป็นข้อมูลจำลอง ใช้ประกอบการตัดสินใจ ไม่ใช่ประกาศทางการ</p>
 <p id="model-job-status" role="status" aria-live="polite">กำลังโหลดผลล่าสุด…</p>
 <div id="model-results" hidden>
+ <div class="river-card"><h3>แม่น้ำเจ้าพระยาในแบบจำลอง</h3><p id="river-text">–</p><svg id="dam-chart" class="dam-chart" viewBox="0 0 600 160" role="img" aria-label="อัตราระบายท้ายเขื่อนเจ้าพระยาตามรายงานข่าว"></svg><p class="dam-legend"><span class="dot actual"></span>ระบายจริงตามข่าว <span class="dot cap"></span>เพดาน "ไม่เกิน" <span class="dot plan"></span>แผน/คาดการณ์ <span class="line"></span>น้ำที่แบบจำลองปล่อยเข้าแม่น้ำ (หน่วงเวลาเดินทาง)</p></div>
  <div class="table-scroll"><table class="ev-table model-table"><thead><tr><th>จังหวัด</th><th>พื้นที่มีน้ำ ≥ 2 ซม. (ตร.กม.)</th><th>ความละเอียด</th><th>เวลา</th></tr></thead><tbody id="model-provinces"></tbody></table></div>
  <p id="model-validation" class="model-validation"></p>
 </div>
 <details class="model-details"><summary>วิธีคำนวณ ข้อมูลเข้า และข้อจำกัด</summary>
- <div class="model-readiness"><div><b>ข้อมูลที่ใช้</b><p>ภูมิประเทศ Copernicus DEM 30 ม. • ฝนรายชั่วโมงจากสถานี ThaiWater (สูงสุด 16 สถานีต่อพื้นที่) • ถนน OSM (ตัดทางยกระดับ/สะพาน) • การซึมและการระบายเป็นสมมติฐาน 3 ระดับ</p></div><div><b>ยังไม่ได้ใช้</b><p>ระดับน้ำแม่น้ำ/คลองเป็นเงื่อนไขขอบ • ท่อ ประตูน้ำ ปั๊ม • การปล่อยน้ำเขื่อน • น้ำหลากจากต้นน้ำนอกพื้นที่ (สำคัญมากในกาญจนบุรี สระบุรี นครนายก)</p></div></div>
+ <div class="model-readiness"><div><b>ข้อมูลที่ใช้</b><p>ภูมิประเทศ Copernicus DEM 30 ม. • ฝนรายชั่วโมงจากสถานี ThaiWater (สูงสุด 16 สถานีต่อพื้นที่) • ถนน OSM (ตัดทางยกระดับ/สะพาน) • แม่น้ำเจ้าพระยา: น้ำเข้าตามอัตราระบายท้ายเขื่อนเจ้าพระยาจากข่าว หน่วง 20 ชม. (ชัยนาท→อยุธยา ~24 ชม.) ร่องน้ำลึกสมมติ 5 ม. • การระบาย กทม.: กำลังสูบ 1,300 ลบ.ม./วินาที (ThaiPublica 2568) ≈ 2.9 มม./ชม.</p></div><div><b>ยังไม่ได้ใช้</b><p>ระดับน้ำที่วัดจริงในแม่น้ำ/คลอง • หน้าตัดลำน้ำจริง (ใช้ความลึกสมมติ) • แม่น้ำป่าสัก/ท่าจีน/น้อย • ท่อ ประตูน้ำ ปั๊มรายจุด • น้ำหลากจากต้นน้ำนอกพื้นที่ (สำคัญมากในกาญจนบุรี สระบุรี นครนายก)</p></div></div>
  <p id="model-balance"></p>
  <p class="model-warning">สีม่วงบอกความลึกเฉลี่ยของเซลล์ ไม่ใช่ความลึกที่วัดบนถนนเส้นนั้น • พื้นที่ภูเขาแบบจำลองแสดงเฉพาะน้ำฝนที่ขังในร่องหุบ ไม่ได้จำลองน้ำป่าหรือแม่น้ำล้นตลิ่ง • ผลตรวจกับรายงานใช้บอกความน่าเชื่อถือ ยังไม่ได้นำไปปรับแบบจำลอง</p>
 </details>

@@ -53,6 +53,19 @@ class OpenBoundaryTests(unittest.TestCase):
   out=simulate(z,0,duration_s=600,dt=5,initial=h,infiltration_mm_h=0,drainage_mm_h=0)
   self.assertEqual(out['balance']['boundaryOutflowM3'],0)
   self.assertAlmostEqual(out['depth'].sum(),h.sum())
+class RiverTermsTests(unittest.TestCase):
+ def test_inflow_sink_and_cell_drainage_balance_numba_matches_numpy(self):
+  rng=np.random.default_rng(3);z=np.tile(np.linspace(3,0,20),(12,1))+rng.random((12,20))*.2
+  src=np.zeros_like(z);src[5:7,0]=500.  # river entering on the west
+  sink=np.zeros(z.shape,dtype=np.uint8);sink[:,-1]=1  # sea on the east
+  drn=np.where(np.arange(20)[None,:]<10,4.,0.)*np.ones_like(z)
+  args=dict(duration_s=3600,dx=100,dt=5,infiltration_mm_h=1,drainage_mm_h=drn,inflow_mm_h=src,sink=sink,capture=(3600,))
+  a=simulate(z,8,use_numba=False,**args);b=simulate(z,8,use_numba=True,**args)
+  self.assertLess(float(np.abs(a['depth']-b['depth']).max()),1e-12)
+  for out in (a,b):
+   self.assertGreater(out['balance']['inflowM3'],0);self.assertGreater(out['balance']['sinkM3'],0)
+   self.assertLess(out['balance']['relativeResidual'],1e-10)
+  self.assertEqual(float(b['depth'][:,-1].sum()),0.)
 class ValidationTests(unittest.TestCase):
  def setUp(self):
   from datetime import datetime,timezone,timedelta

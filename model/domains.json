@@ -1,13 +1,104 @@
 {
  "note": "Model/detail domains. bbox = [west, south, east, north] in degrees, clipped to land on coastal edges. Provinces are OSM relation ids; mask code = index+1 within the domain.",
  "domains": [
-  {"id": "central", "name": "ลุ่มเจ้าพระยาตอนล่าง", "cellM": 100, "bbox": [99.80, 13.47, 100.98, 14.70],
-   "provinces": [["กรุงเทพฯ", 92277], ["นนทบุรี", 1908796], ["ปทุมธานี", 1908797], ["พระนครศรีอยุธยา", 1908806], ["สมุทรปราการ", 1908815], ["นครปฐม", 1908788]]},
-  {"id": "northeast", "name": "สระบุรี–นครนายก", "cellM": 100, "bbox": [100.55, 13.94, 101.53, 15.07],
-   "provinces": [["สระบุรี", 1908818], ["นครนายก", 1908787]]},
-  {"id": "chonburi", "name": "ชลบุรี", "cellM": 100, "bbox": [100.85, 12.55, 101.73, 13.60],
-   "provinces": [["ชลบุรี", 1908773]]},
-  {"id": "kanchanaburi", "name": "กาญจนบุรี", "cellM": 250, "bbox": [98.16, 13.71, 99.90, 15.68],
-   "provinces": [["กาญจนบุรี", 1908777]]}
+  {
+   "id": "central",
+   "name": "ลุ่มเจ้าพระยาตอนล่าง",
+   "cellM": 100,
+   "bbox": [
+    99.8,
+    13.47,
+    100.98,
+    14.7
+   ],
+   "provinces": [
+    [
+     "กรุงเทพฯ",
+     92277
+    ],
+    [
+     "นนทบุรี",
+     1908796
+    ],
+    [
+     "ปทุมธานี",
+     1908797
+    ],
+    [
+     "พระนครศรีอยุธยา",
+     1908806
+    ],
+    [
+     "สมุทรปราการ",
+     1908815
+    ],
+    [
+     "นครปฐม",
+     1908788
+    ]
+   ],
+   "river": {
+    "name": "แม่น้ำเจ้าพระยา",
+    "inflowFrom": "เขื่อนเจ้าพระยา",
+    "lagHours": 20,
+    "channelDepthM": 5,
+    "note": "Chainat dam -> Ayutthaya ~24 h (Spring News, 2022); the domain edge is just north of Ayutthaya"
+   }
+  },
+  {
+   "id": "northeast",
+   "name": "สระบุรี–นครนายก",
+   "cellM": 100,
+   "bbox": [
+    100.55,
+    13.94,
+    101.53,
+    15.07
+   ],
+   "provinces": [
+    [
+     "สระบุรี",
+     1908818
+    ],
+    [
+     "นครนายก",
+     1908787
+    ]
+   ]
+  },
+  {
+   "id": "chonburi",
+   "name": "ชลบุรี",
+   "cellM": 100,
+   "bbox": [
+    100.85,
+    12.55,
+    101.73,
+    13.6
+   ],
+   "provinces": [
+    [
+     "ชลบุรี",
+     1908773
+    ]
+   ]
+  },
+  {
+   "id": "kanchanaburi",
+   "name": "กาญจนบุรี",
+   "cellM": 250,
+   "bbox": [
+    98.16,
+    13.71,
+    99.9,
+    15.68
+   ],
+   "provinces": [
+    [
+     "กาญจนบุรี",
+     1908777
+    ]
+   ]
+  }
  ]
 }

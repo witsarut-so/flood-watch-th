@@ -3,7 +3,10 @@
 Manning diffusive face flux, explicit fixed steps and donor-volume limiting.
 Edges are closed by default; open_boundary=True lets water leave through the domain edge as if the
 bed continued with the slope of the last interior cell (at least the local depth gradient), and the
-volume that leaves is reported as boundaryOutflowM3. No channel/pipe network or stage forcing.
+volume that leaves is reported as boundaryOutflowM3.
+Per-cell terms (scalars or arrays, mm/h): rain, inflow (e.g. a river entering the domain),
+infiltration and drainage (e.g. pumping capacity spread over an area). `sink` marks cells held dry
+(e.g. the sea): water reaching them is removed and reported as sinkM3.
 Useful for sensitivity experiments only; not a validated hydraulic forecast.
 """
 import numpy as np
@@ -21,14 +24,14 @@ except ImportError:  # numpy reference path only
 
 if numba:
     @njit(parallel=True,cache=True,fastmath=False)
-    def _step(z,h,rain,step,dx,inf_rate,drn_rate,n,open_b,fx,fy,outg,edge):
+    def _step(z,h,rain,src,step,dx,inf_rate,drn_rate,n,open_b,sink,fx,fy,outg,edge):
         """One explicit step, same arithmetic as the numpy path. edge rows: 0=west 1=east 2=north 3=south."""
-        R,C=z.shape;c=step/3600000.;rv=0.;iv=0.;dv=0.
+        R,C=z.shape;c=step/3600000.;rv=0.;sv=0.;iv=0.;dv=0.
         for r in prange(R):
             for q in range(C):
-                a=rain[r,q]*c;hh=h[r,q]+a;rv+=a
-                t=min(hh,inf_rate*c);hh-=t;iv+=t
-                t=min(hh,drn_rate*c);hh-=t;dv+=t
+                a=rain[r,q]*c;b=src[r,q]*c;hh=h[r,q]+a+b;rv+=a;sv+=b
+                t=min(hh,inf_rate[r,q]*c);hh-=t;iv+=t
+                t=min(hh,drn_rate[r,q]*c);hh-=t;dv+=t
                 h[r,q]=hh
         k=step/dx/n
         for r in prange(R):
@@ -74,7 +77,7 @@ if numba:
                 edge[0,r]*=outg[r,0];edge[1,r]*=outg[r,C-1];ov+=edge[0,r]+edge[1,r]
             for q in range(C):
                 edge[2,q]*=outg[0,q];edge[3,q]*=outg[R-1,q];ov+=edge[2,q]+edge[3,q]
-        mn=0.
+        mn=0.;kv=0.
         for r in prange(R):
             for q in range(C):
                 v=h[r,q]
@@ -87,34 +90,39 @@ if numba:
                     if q==C-1:v-=edge[1,r]
                     if r==0:v-=edge[2,q]
                     if r==R-1:v-=edge[3,q]
-                mn=min(mn,v);h[r,q]=max(v,0.)
-        return rv,iv,dv,ov,mn
+                mn=min(mn,v);v=max(v,0.)
+                if sink[r,q]:kv+=v;v=0.
+                h[r,q]=v
+        return rv,sv,iv,dv,ov,kv,mn
 
-def simulate(z, rain_mm_h, duration_s=3600, dx=100., dt=2., infiltration_mm_h=2., drainage_mm_h=3., roughness=.06, initial=None, capture=(900,1800,3600), open_boundary=False, use_numba=True):
-    z=np.asarray(z,dtype=float);rain=np.broadcast_to(np.asarray(rain_mm_h,dtype=float),z.shape)
-    if z.ndim!=2 or min(z.shape)<2 or not np.isfinite(z).all() or not np.isfinite(rain).all():raise ValueError('Invalid grid')
-    if min(dx,dt,duration_s,roughness)<=0 or min(infiltration_mm_h,drainage_mm_h)<0 or np.any(rain<0):raise ValueError('Invalid parameters')
+def simulate(z, rain_mm_h, duration_s=3600, dx=100., dt=2., infiltration_mm_h=2., drainage_mm_h=3., roughness=.06, initial=None, capture=(900,1800,3600), open_boundary=False, use_numba=True, inflow_mm_h=0., sink=None):
+    z=np.asarray(z,dtype=float);full=lambda v:np.ascontiguousarray(np.broadcast_to(np.asarray(v,dtype=float),z.shape))
+    rain,src,inf,drn=full(rain_mm_h),full(inflow_mm_h),full(infiltration_mm_h),full(drainage_mm_h)
+    sink=np.zeros(z.shape,dtype=np.uint8) if sink is None else np.ascontiguousarray(np.asarray(sink,dtype=np.uint8))
+    if z.ndim!=2 or min(z.shape)<2 or not np.isfinite(z).all() or not all(np.isfinite(a).all() for a in (rain,src,inf,drn)):raise ValueError('Invalid grid')
+    if min(dx,dt,duration_s,roughness)<=0 or any(np.any(a<0) for a in (rain,src,inf,drn)) or sink.shape!=z.shape:raise ValueError('Invalid parameters')
     h=np.zeros_like(z) if initial is None else np.array(initial,dtype=float,copy=True)
     if h.shape!=z.shape or not np.isfinite(h).all() or np.any(h<0):raise ValueError('Invalid initial water')
-    area=dx*dx;initial_volume=float(h.sum()*area);rain_volume=loss_infil=loss_drain=out_volume=0.;elapsed=0.;frames=[]
+    area=dx*dx;initial_volume=float(h.sum()*area);rain_volume=in_volume=loss_infil=loss_drain=out_volume=sink_volume=0.;elapsed=0.;frames=[]
     if numba and use_numba:
-        z=np.ascontiguousarray(z);rain=np.ascontiguousarray(rain);R,C=z.shape
+        z=np.ascontiguousarray(z);R,C=z.shape
         fx=np.zeros((R,C-1));fy=np.zeros((R-1,C));outg=np.zeros((R,C));edge=np.zeros((4,max(R,C)))
         while elapsed<duration_s-1e-9:
             step=min(dt,duration_s-elapsed)
             pending=[t for t in capture if t>elapsed+1e-9]
             if pending:step=min(step,min(pending)-elapsed)
-            rv,iv,dv,ov,mn=_step(z,h,rain,float(step),float(dx),float(infiltration_mm_h),float(drainage_mm_h),float(roughness),bool(open_boundary),fx,fy,outg,edge)
+            rv,sv,iv,dv,ov,kv,mn=_step(z,h,rain,src,float(step),float(dx),inf,drn,float(roughness),bool(open_boundary),sink,fx,fy,outg,edge)
             if mn< -1e-10:raise ArithmeticError('Negative water')
-            rain_volume+=rv*area;loss_infil+=iv*area;loss_drain+=dv*area;out_volume+=ov*area;elapsed+=step
+            rain_volume+=rv*area;in_volume+=sv*area;loss_infil+=iv*area;loss_drain+=dv*area;out_volume+=ov*area;sink_volume+=kv*area;elapsed+=step
             if any(abs(elapsed-t)<1e-6 for t in capture):frames.append((int(elapsed),h.copy()))
+    sinkb=sink.astype(bool)
     while elapsed<duration_s-1e-9:
         step=min(dt,duration_s-elapsed)
         pending=[t for t in capture if t>elapsed+1e-9]
         if pending:step=min(step,min(pending)-elapsed)
-        added=rain*(step/3600000);h+=added;rain_volume+=float(added.sum()*area)
-        infil=np.minimum(h,infiltration_mm_h*step/3600000);h-=infil;loss_infil+=float(infil.sum()*area)
-        drain=np.minimum(h,drainage_mm_h*step/3600000);h-=drain;loss_drain+=float(drain.sum()*area)
+        added=rain*(step/3600000);inflow=src*(step/3600000);h+=added+inflow;rain_volume+=float(added.sum()*area);in_volume+=float(inflow.sum()*area)
+        infil=np.minimum(h,inf*step/3600000);h-=infil;loss_infil+=float(infil.sum()*area)
+        drain=np.minimum(h,drn*step/3600000);h-=drain;loss_drain+=float(drain.sum()*area)
         eta=z+h
         sx=(eta[:,:-1]-eta[:,1:])/dx;sy=(eta[:-1,:]-eta[1:,:])/dx
         hx=np.maximum(0,np.maximum(eta[:,:-1],eta[:,1:])-np.maximum(z[:,:-1],z[:,1:]))
@@ -136,8 +144,8 @@ def simulate(z, rain_mm_h, duration_s=3600, dx=100., dt=2., infiltration_mm_h=2.
             h[:,0]-=ow;h[:,-1]-=oe;h[0,:]-=on;h[-1,:]-=os_
             out_volume+=float((ow.sum()+oe.sum()+on.sum()+os_.sum())*area)
         if float(h.min()) < -1e-10:raise ArithmeticError('Negative water')
-        h=np.maximum(h,0);elapsed+=step
+        h=np.maximum(h,0);sink_volume+=float(h[sinkb].sum()*area);h[sinkb]=0;elapsed+=step
         if any(abs(elapsed-t)<1e-6 for t in capture):frames.append((int(elapsed),h.copy()))
     volume=float(h.sum()*area)
-    residual=initial_volume+rain_volume-loss_infil-loss_drain-out_volume-volume
-    return {'depth':h,'frames':frames,'balance':{'initialM3':initial_volume,'rainM3':rain_volume,'infiltrationM3':loss_infil,'drainageM3':loss_drain,'boundaryOutflowM3':out_volume,'storedM3':volume,'residualM3':residual,'relativeResidual':abs(residual)/max(1,initial_volume+rain_volume)}}
+    residual=initial_volume+rain_volume+in_volume-loss_infil-loss_drain-out_volume-sink_volume-volume
+    return {'depth':h,'frames':frames,'balance':{'initialM3':initial_volume,'rainM3':rain_volume,'inflowM3':in_volume,'infiltrationM3':loss_infil,'drainageM3':loss_drain,'boundaryOutflowM3':out_volume,'sinkM3':sink_volume,'storedM3':volume,'residualM3':residual,'relativeResidual':abs(residual)/max(1,initial_volume+rain_volume+in_volume)}}

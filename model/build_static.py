@@ -144,6 +144,32 @@ def build_model_roads(els,meta):
     for k,v in tiles.items():dump(OUT/f'model-roads/{meta["id"]}/{k}.json.gz',v)
     return sorted(tiles)
 
+def build_river(els,meta,river):
+    """data/domains/<id>/river.tif: 1 = channel cell of the named river (OSM water areas + centre line, 1-cell buffer),
+    2 = inflow cells where the river crosses the domain's upstream (north) edge."""
+    with rasterio.open(ROOT/'data/domains'/meta['id']/'mask.tif') as src:shape=src.shape;aff=src.transform;crs=src.crs;profile=src.profile
+    name=river['name'];polys=[];lines=[]
+    for el in els:
+        t=el.get('tags',{})
+        if (t.get('name:th') or t.get('name'))!=name:continue
+        if t.get('waterway')=='river' and el['type']=='way':lines.append(geom(el))
+        elif t.get('natural')=='water' or t.get('waterway')=='riverbank':
+            if el['type']=='way':
+                c=geom(el)
+                if len(c)>=4:polys.append([c])
+            else:
+                rs=rings([[(p['lat'],p['lon']) for p in m.get('geometry',[])] for m in el.get('members',[]) if m.get('type')=='way' and m.get('role')=='outer'])
+                polys+= [[r] for r in rs]
+    def proj(c):
+        xs,ys=transform('EPSG:4326',crs,[p[1] for p in c],[p[0] for p in c]);return list(zip(xs,ys))
+    shapes=[({'type':'Polygon','coordinates':[proj(r) for r in poly]},1) for poly in polys]+[({'type':'LineString','coordinates':proj(l)},1) for l in lines if len(l)>=2]
+    if not shapes:return None
+    m=rasterize(shapes,out_shape=shape,transform=aff,all_touched=True,dtype='uint8')
+    d=m.copy();d[1:,:]|=m[:-1,:];d[:-1,:]|=m[1:,:];d[:,1:]|=m[:,:-1];d[:,:-1]|=m[:,1:]   # 1-cell buffer: centre lines are thinner than a cell
+    d[:4,:][d[:4,:]>0]=2
+    with rasterio.open(ROOT/'data/domains'/meta['id']/'river.tif','w',**{**profile,'dtype':'uint8'}) as dst:dst.write(d,1)
+    return {'name':name,'cells':int((d>0).sum()),'inflowCells':int((d==2).sum()),'osmPolygons':len(polys),'osmLines':len(lines)}
+
 def build_overview(meta,deg=OVERVIEW_DEG,sub='overview'):
     """Lat/lng-aligned raster of model cell indices so the browser can paint a frame without reprojection."""
     with rasterio.open(ROOT/'data/domains'/meta['id']/'mask.tif') as src:mask=src.read(1);aff=src.transform;crs=src.crs
@@ -214,6 +240,7 @@ if __name__=='__main__':
     for d in doms:
         meta=json.loads((ROOT/'data/domains'/d['id']/'metadata.json').read_text())
         tiles=build_model_roads(els,meta);ov=build_overview(meta);ovlo=build_overview(meta,OVERVIEW_LO_DEG,'overview-lo')
+        if d.get('river'):print(d['id'],'river',build_river(els,meta,d['river']),flush=True)
         domains.append({'id':d['id'],'name':d['name'],'cellSizeM':meta['cellSizeM'],'shape':meta['shape'],'bbox':meta['bbox'],'provinces':[p['name'] for p in meta['provinces']],'roadTiles':tiles,'overview':ov,'overviewLo':ovlo})
         print(d['id'],'road tiles',len(tiles),'overview',ov['width'],'x',ov['height'],flush=True)
     dump(OUT/'domains.json',{'mainTileDeg':MAIN_TILE,'minorTileDeg':MINOR_TILE,'mainTiles':mains,'minorTiles':minors,'domains':domains})

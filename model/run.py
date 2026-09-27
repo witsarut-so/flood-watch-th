@@ -71,9 +71,27 @@ def domain_bundle(bundle,meta,pad=.2):
     w,s,e,n=meta['bbox']
     return {**bundle,'rainHistory':[h for h in bundle.get('rainHistory',[]) if s-pad<=h['lat']<=n+pad and w-pad<=h['lng']<=e+pad]}
 
+# Middle drainage scenario inside Bangkok: BMA pumping stations discharge ~1,300 m3/s to the Chao Phraya (both banks),
+# spread over the Bangkok cells of the grid (ThaiPublica interview with BMA, 2025). Elsewhere the 3 mm/h assumption stays.
+BMA_PUMPING_M3S=1300.
+SPINUP_H=24  # river-only warm-up so the channel is already flowing when the rain window starts
+
+def dam_series(points,times,lag_h):
+    """m3/s entering the domain at each simulated hour: news-reported dam release `lag_h` hours earlier.
+    Uses 'actual' readings only; the median of those reported in the 12 h before the lagged time, else the
+    latest before it, else the earliest one (backfill at the start of the record)."""
+    act=sorted((datetime.fromisoformat(p['at'].replace('Z','+00:00')),p['m3s']) for p in points if p.get('type')=='actual')
+    if not act:return None
+    out=[]
+    for t in times:
+        tl=t-timedelta(hours=lag_h);recent=[v for at,v in act if tl-timedelta(hours=12)<=at<=tl]
+        before=[v for at,v in act if at<=tl]
+        out.append(float(np.median(recent)) if recent else float(before[-1]) if before else float(act[0][1]))
+    return out
+
 def run_task(task):
     """One (domain, scenario): simulate hour by hour, write frames, return stats and validation."""
-    d,k,drain,stations_xy,values,times,obs,out_dir,threads=task
+    d,k,drain,stations_xy,values,times,obs,out_dir,river,threads=task
     try:
         import numba;numba.set_num_threads(threads)
     except (ImportError,ValueError):pass
@@ -85,24 +103,40 @@ def run_task(task):
     weights=np.array([1/np.maximum((gx-x)**2+(gy-y)**2,1000**2) for x,y in stations_xy],dtype='float32')
     del yy,xx,gx,gy
     names={p['code']:p['name'] for p in meta['provinces']};inside=mask>0
-    h=np.zeros_like(z);balance={'initialM3':0.,'rainM3':0.,'infiltrationM3':0.,'drainageM3':0.,'boundaryOutflowM3':0.}
+    # drainage per cell: scenario value, with the Bangkok pumping capacity in the middle scenario
+    drn=np.full(z.shape,float(drain));bkk=[c for c,nm in names.items() if nm=='กรุงเทพฯ']
+    if drain==3. and bkk:cells=(mask==bkk[0]);drn[cells]=BMA_PUMPING_M3S/(cells.sum()*dx*dx)*3.6e6
+    inf=np.full(z.shape,INFILTRATION);h=np.zeros_like(z);inflow=0.;sink=None;channel=np.zeros(z.shape,dtype=bool);qs=None
+    if river:
+        with rasterio.open(base/'river.tif') as src:rv=src.read(1)
+        channel=rv>0;z=z.copy();z[channel]-=river['channelDepthM'];h[channel]=river['channelDepthM']  # channel filled to its normal (DSM) level
+        drn[channel]=0;inf[channel]=0
+        # sea: low cells outside the provinces near the southern edge are held at sea level (dry sink)
+        R=z.shape[0];sink=np.zeros(z.shape,dtype=np.uint8);sink[int(R*.9):,:]=((z[int(R*.9):,:]<=.5)&(mask[int(R*.9):,:]==0)&~channel[int(R*.9):,:])
+        qs=river['q'];inlet=rv==2;per_cell=lambda q:np.where(inlet,q*3.6e6/(inlet.sum()*dx*dx),0.)
+        if qs:
+            out=simulate(z,0,duration_s=SPINUP_H*3600,dx=dx,dt=dt,infiltration_mm_h=inf,drainage_mm_h=drn,initial=h,capture=(SPINUP_H*3600,),open_boundary=True,inflow_mm_h=per_cell(river['q0']),sink=sink);h=out['depth']
+    balance={'initialM3':float(h.sum()*dx*dx),'rainM3':0.,'inflowM3':0.,'infiltrationM3':0.,'drainageM3':0.,'boundaryOutflowM3':0.,'sinkM3':0.}
     depth=np.zeros((len(times),)+z.shape,dtype='uint8');frames=[];rain_means=[]
     for i,hour_values in enumerate(values):
         # inverse-distance weights renormalised over the stations that reported this hour (None = missing)
         avail=[j for j,v in enumerate(hour_values) if v is not None]
         rain=np.tensordot(np.asarray([hour_values[j] for j in avail],dtype='float32'),weights[avail],axes=1)/weights[avail].sum(axis=0);rain_means.append(float(rain[inside].mean()))
-        out=simulate(z,rain,dx=dx,dt=dt,infiltration_mm_h=INFILTRATION,drainage_mm_h=drain,initial=h,capture=(3600,),open_boundary=True);h=out['depth']
-        for key in ['rainM3','infiltrationM3','drainageM3','boundaryOutflowM3']:balance[key]+=out['balance'][key]
-        shown=np.where(inside,h,0);depth[i]=np.minimum(np.round(shown*100),255).astype('uint8')
+        if river and qs:inflow=per_cell(qs[i])
+        out=simulate(z,rain,dx=dx,dt=dt,infiltration_mm_h=inf,drainage_mm_h=drn,initial=h,capture=(3600,),open_boundary=True,inflow_mm_h=inflow,sink=sink);h=out['depth']
+        for key in ['rainM3','inflowM3','infiltrationM3','drainageM3','boundaryOutflowM3','sinkM3']:balance[key]+=out['balance'][key]
+        # the river channel itself is not "flooding": only water outside it is shown and counted
+        shown=np.where(inside&~channel,h,0);depth[i]=np.minimum(np.round(shown*100),255).astype('uint8')
         with gzip.open(Path(out_dir)/f'{d}-s{k}-f{i}.bin.gz','wb',compresslevel=6) as f:f.write(depth[i].tobytes())
-        wet=h>=THRESHOLD_M
+        wet=(h>=THRESHOLD_M)&~channel
         frames.append({'validAt':times[i],'provincesKm2':{names[c]:round(float((wet&(mask==c)).sum()*dx*dx/1e6),2) for c in names},'maxDepthM':round(float(shown.max()),2)})
     balance['storedM3']=float(h.sum()*dx*dx)
-    balance['residualM3']=balance['rainM3']-balance['infiltrationM3']-balance['drainageM3']-balance['boundaryOutflowM3']-balance['storedM3']
-    balance['relativeResidual']=abs(balance['residualM3'])/max(1,balance['rainM3'])
+    balance['residualM3']=balance['initialM3']+balance['rainM3']+balance['inflowM3']-balance['infiltrationM3']-balance['drainageM3']-balance['boundaryOutflowM3']-balance['sinkM3']-balance['storedM3']
+    balance['relativeResidual']=abs(balance['residualM3'])/max(1,balance['initialM3']+balance['rainM3']+balance['inflowM3'])
     if balance['relativeResidual']>1e-8:raise ArithmeticError(f'Water balance failed for {d}')
     check=validate(obs,depth,mask,affine,crs,[datetime.fromisoformat(t) for t in times])
-    return d,k,{'id':str(int(drain)),'index':k,'drainageMmH':drain,'infiltrationMmH':INFILTRATION,'roughness':.06,'rainMeanTotalMm':float(sum(rain_means)),'balance':balance,'validation':check,'frames':frames}
+    bkk_rate=float(drn[mask==bkk[0]].mean()) if (bkk and drain==3.) else None
+    return d,k,{'id':str(int(drain)),'index':k,'drainageMmH':drain,'bangkokDrainageMmH':bkk_rate,'infiltrationMmH':INFILTRATION,'roughness':.06,'rainMeanTotalMm':float(sum(rain_means)),'balance':balance,'validation':check,'frames':frames}
 
 def skill(v):
     """Hit rate above chance for the same wet area. Plain hit rate would always favour the wettest map."""
@@ -127,7 +161,14 @@ def main(input_path,out_dir):
             'rainStations':[{k:st[k] for k in ['id','name','lat','lng','source']} for st in stations],
             'rainStationsExcluded':[{'id':h['id'],'name':h['name'],'reason':'no value within the selected window'} for h in domain_bundle(bundle,meta)['rainHistory'] if h['id'] not in kept],'stationsPerHour':coverage,
             'observationsUsed':{k:sum(1 for o in obs if o['kind']==k) for k in {o['kind'] for o in obs}},'scenarios':[None]*len(DRAINAGE)})
-        for k,drain in enumerate(DRAINAGE):tasks.append([dom['id'],k,drain,list(zip(xs,ys)),values,iso,obs,str(out_dir)])
+        river=None
+        if dom.get('river') and (ROOT/'data/domains'/dom['id']/'river.tif').exists():
+            cfg=dom['river'];pts=(bundle.get('damRelease') or {}).get('points',[])
+            q=dam_series(pts,times,cfg['lagHours']);q0=dam_series(pts,[times[0]-timedelta(hours=SPINUP_H)],cfg['lagHours']) if q else None
+            river={**cfg,'q':q,'q0':q0[0] if q0 else None}
+            domains[-1]['river']={'name':cfg['name'],'inflowFrom':cfg['inflowFrom'],'lagHours':cfg['lagHours'],'channelDepthM':cfg['channelDepthM'],'spinupHours':SPINUP_H if q else 0,
+                'inflowM3s':q,'newsPoints':[p for p in pts if p.get('type')=='actual'],'note':'Inflow = Chao Phraya Dam release reported in news, delayed by the travel time; channel depth is an assumption (no bathymetry).' if q else 'No dam release figures in the news window: channel only carries local rain.'}
+        for k,drain in enumerate(DRAINAGE):tasks.append([dom['id'],k,drain,list(zip(xs,ys)),values,iso,obs,str(out_dir),river])
     # a few processes, each running the numba kernel on the remaining cores (no oversubscription)
     cpus=os.cpu_count() or 2;workers=max(1,min(len(tasks),cpus//2,3));threads=max(1,cpus//workers)
     tasks=[tuple(t+[threads]) for t in tasks]
@@ -142,8 +183,9 @@ def main(input_path,out_dir):
         'inputFetchedAt':bundle['fetchedAt'],'inputSha256':bundle.get('rawSha256'),'thresholdM':THRESHOLD_M,'drainageScenariosMmH':DRAINAGE,
         'depthFiles':'<domain>-s<scenario>-f<frame>.bin.gz: gzip uint8 cm, row-major domain grid, 255 = >=255 cm',
         'rainTimeAssumption':'Provider hourly totals interpreted as the hour ending at timestamp in Asia/Bangkok.','rainInterpolation':'inverse distance squared between the stations reporting each hour (min 1 km); missing station-hours are interpolated from the others, never zero-filled; not radar',
-        'timeStepS':{'100m':15,'250m':30},'initialCondition':'zero additional surface storage','boundaryCondition':'open domain edges (free outflow); no river/sea stage forcing',
-        'notUsed':['river/canal stages','dam releases and gate/pump operations','photos and reports (validation only)','satellite water'],
+        'timeStepS':{'100m':15,'250m':30},'initialCondition':'zero additional surface storage','boundaryCondition':'open domain edges (free outflow); central domain: Chao Phraya channel fed by news-reported dam release, sea cells held dry',
+        'bangkokPumping':{'m3s':BMA_PUMPING_M3S,'source':'BMA pumping stations to the Chao Phraya, both banks (ThaiPublica, June 2025)','usedIn':'middle drainage scenario, Bangkok cells'},
+        'notUsed':['river/canal stage observations','individual gate/pump operations','photos and reports (validation only)','satellite water'],
         'validationNote':'Citizen reports only say where water was seen; road sensors reading 0 are the only dry checks. Hit rate above baseRate means water is placed where people reported it better than chance.',
         'domains':domains}
     (out_dir/'result.json').write_text(json.dumps(result,ensure_ascii=False,separators=(',',':')))

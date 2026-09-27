@@ -7,7 +7,7 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {gunzipSync} from 'node:zlib';
 import {buildNamedIndex,matchNamed,normName} from './named-match.mjs';
 import {normalize} from './model-inputs.mjs';
-import {parseRss,stripTags,relevance,extractPlaces,extractPlacesSocial,extractDepth,extractFacts,redact,buildGazetteer,titleKey} from './evidence-text.mjs';
+import {parseRss,stripTags,relevance,extractPlaces,extractPlacesSocial,extractDepth,extractFacts,extractDamRelease,redact,buildGazetteer,titleKey} from './evidence-text.mjs';
 
 const TW='https://api-v3.thaiwater.net/api/v1/thaiwater30/public/';
 const TRAFFY='https://publicapi.traffy.in.th/share/teamchadchart/search';
@@ -204,7 +204,7 @@ export async function mediaFeed(g,idx){
  return (feed.items||[]).map(x=>{const text=redact(x.text||''),places=extractPlacesSocial(text,g),depth=extractDepth(text)[0];
   return {id:'media:'+x.id,kind:'social',subkind:'media',source:`${PLATFORM[x.platform]||x.platform} @${x.handle} (${x.outlet})`,sourceUrl:x.url,at:x.postedAt,title:text.slice(0,200),
    places,precision:places[0]?.precision||null,lat:places[0]?.lat??null,lng:places[0]?.lng??null,province:places[0]?.province??null,depthCm:depth?.cm??null,depthEstimated:depth?.estimated??null,facts:extractFacts(text),
-   geo:matchNamed(text,idx,{places,bareScan:true}),collectedFor:feed.window};});
+   geo:matchNamed(text,idx,{places,bareScan:true}),damRelease:extractDamRelease(text),collectedFor:feed.window};});
 }
 
 let named;
@@ -235,10 +235,18 @@ async function news(g,errors,idx){
  const direct=items.filter(i=>!i.via).slice(0,ARTICLE_LIMIT);
  const bodies=await mapLimit(direct,3,i=>article(i.link));direct.forEach((i,n)=>{i.body=bodies[n]||'';i.articleRead=!!bodies[n];});
  return items.map(i=>{const text=`${i.title} ${i.summary} ${i.body||''}`;const places=extractPlaces(text,g),depth=extractDepth(text);
-  return {id:'news:'+titleKey(i.title),kind:'news',source:i.publisher,via:i.via,feed:i.feed,sourceUrl:i.link,at:i.publishedAt,title:i.title,excerpt:(i.summary||stripTags(i.body||'')).slice(0,280),places,precision:places[0]?.precision||null,lat:places[0]?.lat??null,lng:places[0]?.lng??null,province:places[0]?.province??null,depthCm:depth.length?Math.max(...depth.map(d=>d.cm)):null,depthEstimated:depth.length?depth.every(d=>d.estimated):null,depthPhrases:depth.map(d=>d.phrase).slice(0,3),facts:extractFacts(text),alsoIn:i.alsoIn||[],articleRead:!!i.articleRead,relevance:i.score,geo:matchNamed(text,idx,{places,bareScan:true})};});
+  return {id:'news:'+titleKey(i.title),kind:'news',source:i.publisher,via:i.via,feed:i.feed,sourceUrl:i.link,at:i.publishedAt,title:i.title,excerpt:(i.summary||stripTags(i.body||'')).slice(0,280),places,precision:places[0]?.precision||null,lat:places[0]?.lat??null,lng:places[0]?.lng??null,province:places[0]?.province??null,depthCm:depth.length?Math.max(...depth.map(d=>d.cm)):null,depthEstimated:depth.length?depth.every(d=>d.estimated):null,depthPhrases:depth.map(d=>d.phrase).slice(0,3),facts:extractFacts(text),alsoIn:i.alsoIn||[],articleRead:!!i.articleRead,relevance:i.score,geo:matchNamed(text,idx,{places,bareScan:true}),damRelease:extractDamRelease(text)};});
 }
 
 function nearestProvince(g,lat,lng){let best=null,d=Infinity;for(const p of g.provinces){const e=(p.lat-lat)**2+((p.lng-lng)*Math.cos(lat*Math.PI/180))**2;if(e<d){d=e;best=p;}}return best?.short||null;}
+
+// Timeline of Chao Phraya Dam release reported in the news (one point per item and value/type). Times are
+// publication times, so they lag the actual change by up to a few hours.
+export function damTimeline(items){
+ const pts=[];for(const i of items)for(const r of i.damRelease||[])pts.push({at:i.at,m3s:r.m3s,type:r.type,source:i.source,url:i.sourceUrl,phrase:r.phrase});
+ pts.sort((a,b)=>a.at.localeCompare(b.at));
+ return {site:'เขื่อนเจ้าพระยา (ชัยนาท) · อัตราระบายท้ายเขื่อนตามข่าว',unit:'ลบ.ม./วินาที',points:pts};
+}
 
 export function summarise(items,g){
  const by=new Map();
@@ -270,7 +278,8 @@ function refresh(){
   const results=await Promise.allSettled(Object.values(tasks).map(f=>f()));const sources={};const items=[];
   Object.keys(tasks).forEach((name,i)=>{const r=results[i];if(r.status==='fulfilled'){items.push(...r.value);sources[name]={ok:true,count:r.value.length};}else{sources[name]={ok:false,count:0,error:r.reason.message};errors.push({source:name,error:r.reason.message});}});
   let rain=[];try{rain=await rainRate();sources.rainRate={ok:true,count:rain.length};}catch(e){sources.rainRate={ok:false,count:0,error:e.message};errors.push({source:'rainRate',error:e.message});}
-  const out={fetchedAt,windowHours:{news:HOURS,social:HOURS,citizen:TRAFFY_HOURS,roadSensors:48},sources,errors,provinces:summarise(items,gaz),items,rainRate:{fields:['lat','lng','mm1h','mm24h'],stations:rain},
+  const damRelease=damTimeline(items);
+  const out={damRelease,fetchedAt,windowHours:{news:HOURS,social:HOURS,citizen:TRAFFY_HOURS,roadSensors:48},sources,errors,provinces:summarise(items,gaz),items,rainRate:{fields:['lat','lng','mm1h','mm24h'],stations:rain},
    notes:['รายงานประชาชน (Traffy) เป็นเรื่องร้องเรียน ไม่ได้ตรวจสอบภาคสนาม และครอบคลุมกรุงเทพฯ เป็นหลัก','ข่าวถูกจัดตำแหน่งจากชื่อสถานที่ในข้อความ ละเอียดสุดระดับตำบล/แขวง ไม่ใช่จุดเกิดเหตุจริง','ความลึกจากข่าว/รายงานเป็นตัวเลขที่ผู้เขียนระบุ หรือประมาณจากคำอย่าง "ระดับเข่า" (ทำเครื่องหมายว่าประมาณ)','เซนเซอร์ถนนและเขื่อนอาจล่าช้า ดูเวลาของแต่ละรายการ','ชื่อถนน/ซอย/หมู่บ้านถูกจับคู่กับ OSM เฉพาะเมื่อบริบทชัดเจน ถนนยาวถูกตัดเฉพาะช่วงใกล้พื้นที่ที่ระบุ','โซเชียล: Bluesky และโพสต์ Instagram/TikTok ของบัญชีสำนักข่าว (เก็บโดยโปรเจกต์ flood-social-feed) ไม่รวมโพสต์ของบุคคลทั่วไป','ถนนน้ำท่วมทางการของ กทม. มาจาก now.bangkok.go.th (จุดวัด + รายงานสำนักงานเขต) อัปเดตตามรอบของ กทม.','อัตราการสูบของสถานีสูบน้ำไม่มีข้อมูลสาธารณะ แสดงเฉพาะอัตราการไหลในคลองและระดับน้ำประตูระบายน้ำ']};
   await mkdir(new URL('./data/evidence/',import.meta.url),{recursive:true});await writeFile(new URL('./data/evidence/latest.json',import.meta.url),JSON.stringify(out));
   cache=out;return out;})().finally(()=>{pending=null;});
