@@ -44,7 +44,7 @@ function paintEvidence(){
    L.circleMarker(g.lines[0]?.[Math.floor(g.lines[0].length/2)]||[g.lat,g.lng],{renderer:evidenceRenderer,pane:'evidence',radius:5,color:'#fff',weight:2,fillColor:MENTION,fillOpacity:1}).bindPopup(()=>`<b>${esc(g.name)}</b> <small>(${esc(geoKind[g.kind]||g.kind)}${g.province?' • '+esc(g.province):''}${g.clipped?' • แสดงเฉพาะช่วงใกล้พื้นที่ที่ระบุ':''})</small><hr>${popup(i)}`,{maxWidth:320}).addTo(evidenceLayers.mentions);}
   if(!$('f-'+k)?.checked)continue;
   const style={renderer:evidenceRenderer,pane:'evidence',color:'#fff',weight:1.2,fillColor:evidenceKinds[k],fillOpacity:.9};
-  if(k==='news'||(k==='social'&&!i.precision)){for(const p of (i.places||[]).slice(0,5))(k==='social'?L.marker([p.lat,p.lng],{pane:'evidence',icon:icon('social','💬')}):L.circleMarker([p.lat,p.lng],{...style,radius:p.precision==='province'?7:5.5,fillOpacity:.6})).bindPopup(()=>popup(i),{maxWidth:300}).addTo(evidenceLayers[k]);continue;}
+  if(k==='news'||(k==='social'&&!i.precision)){for(const p of (i.places||[]).filter(p=>p.precision!=='province').slice(0,5))(k==='social'?L.marker([p.lat,p.lng],{pane:'evidence',icon:icon('social','💬')}):L.circleMarker([p.lat,p.lng],{...style,radius:p.precision==='province'?7:5.5,fillOpacity:.6})).bindPopup(()=>popup(i),{maxWidth:300}).addTo(evidenceLayers[k]);continue;}
   if(k==='bmaroad'||k==='bmareport'){const col=BMA_COLOR[i.level]||'#e03131',dash=k==='bmareport'?'7 5':null,layer=evidenceLayers[k];
    // district-level approximations (report named a road but no segment) are faint and off by default
    const approx=k==='bmareport'&&i.approximate;
@@ -53,7 +53,7 @@ function paintEvidence(){
     L.polyline(l,{renderer:evidenceRenderer,color:'#fff',weight:9,opacity:.85,interactive:false}).addTo(layer);L.polyline(l,{renderer:evidenceRenderer,color:col,weight:5,opacity:.95,dashArray:dash,lineCap:'round'}).bindPopup(()=>bmaPopup(i),{maxWidth:320}).addTo(layer);}
    if(Number.isFinite(i.lat))L.circleMarker([i.lat,i.lng],{renderer:evidenceRenderer,pane:'evidence',radius:k==='bmaroad'?6:5,color:'#fff',weight:2,fillColor:col,fillOpacity:1,dashArray:null}).bindPopup(()=>bmaPopup(i),{maxWidth:320}).addTo(layer);
    continue;}
-  if(!Number.isFinite(i.lat))continue;
+  if(!Number.isFinite(i.lat)||(k==='social'&&i.precision==='province'))continue;
   let layer;
   if(k==='social')layer=L.marker([i.lat,i.lng],{pane:'evidence',icon:icon('social','💬')});
   else if(k==='flow')layer=map.getZoom()>=11?L.marker([i.lat,i.lng],{pane:'evidence',icon:icon('flow',`⇢ ${esc(i.flowM3s.toFixed(1))}`)}):L.circleMarker([i.lat,i.lng],{...style,radius:4});

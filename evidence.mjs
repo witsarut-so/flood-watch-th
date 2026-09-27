@@ -35,6 +35,14 @@ const TRAFFY_CACHE=new URL('./data/evidence/traffy-last-good.json',import.meta.u
 const RELAY=new URL('./data/evidence/thai.json.gz',import.meta.url),RELAY_FRESH_MIN=60;
 async function relayPart(name){try{const r=JSON.parse(gunzipSync(await readFile(RELAY)));const part=r[name];if(part?.ok&&part.items?.length)return {...part,relayAt:r.fetchedAt,host:r.host};}catch{}return null;}
 const minutesSince=t=>(Date.now()-Date.parse(t))/60000;
+// The same person often files one problem two or three times within minutes: keep the newest ticket per
+// (first 60 characters of text, ~100 m cell). Returns how many were removed (items is edited in place).
+export function dedupeReports(items){
+ const key=i=>i.title.replace(/\s+/g,' ').slice(0,60)+'|'+i.lat.toFixed(3)+'|'+i.lng.toFixed(3),best=new Map();
+ for(const i of items)if(i.kind==='citizen'){const k=key(i),b=best.get(k);if(!b||i.at>b.at)best.set(k,i);}
+ const keep=new Set(best.values()),n=items.length;
+ for(let j=items.length-1;j>=0;j--)if(items[j].kind==='citizen'&&!keep.has(items[j]))items.splice(j,1);
+ return n-items.length;}
 function relayItems(part,label){const stale=minutesSince(part.fetchedAt)>RELAY_FRESH_MIN;return part.items.map(i=>({...i,via:label,...(stale?{stale:true,fetchedAt:part.fetchedAt}:{})}));}
 export async function traffyDirect(errors,idx){
  const cutoff=Date.now()-TRAFFY_HOURS*3600000,out=[];let complete=false;
@@ -185,7 +193,7 @@ async function bluesky(g,idx,errors){
  for(const term of ['น้ำท่วม','ท่วมขัง','น้ำขัง','น้ำป่า','ระดับน้ำ','flood bangkok','flood thailand']){
   try{const d=await get(`${BSKY}?q=${q(term)}&limit=100&sort=latest`);
    for(const p of d.posts||[]){const text=p.record?.text||'',at=p.record?.createdAt||p.indexedAt;if(seen.has(p.uri)||!(Date.parse(at)>=cutoff)||!relevance(text).relevant)continue;
-    const rkey=p.uri.split('/').pop(),places=extractPlacesSocial(text,g),depth=extractDepth(text)[0];
+    const rkey=p.uri.split('/').pop(),places=extractPlacesSocial(text,g),depth=extractDepth(text)[0];if(!places.length)continue;  // no Thai place named: cannot be mapped (mostly foreign floods, jokes, AI-image chatter)
     const img=(p.embed?.images||p.embed?.media?.images||[]).map(i=>i.thumb).find(u=>/^https:\/\/cdn\.bsky\.app\//.test(u||''));
     seen.set(p.uri,{id:'bsky:'+rkey,kind:'social',source:`Bluesky @${p.author?.handle||''}`,author:p.author?.displayName||p.author?.handle||'',sourceUrl:`https://bsky.app/profile/${p.author?.handle}/post/${rkey}`,at:new Date(at).toISOString(),title:redact(text).slice(0,200),places,precision:places[0]?.precision||null,lat:places[0]?.lat??null,lng:places[0]?.lng??null,province:places[0]?.province??null,depthCm:depth?.cm??null,depthEstimated:depth?.estimated??null,facts:extractFacts(text),photo:img||null,geo:matchNamed(text,idx,{places})});}  // social: keyword-anchored names only (no free scan of chatty posts)
   }catch(e){errors.push({source:'bluesky:'+term,error:e.message});}
@@ -277,10 +285,11 @@ function refresh(){
   const tasks={bmaAlert:()=>bmaWithFallback(gaz,idx,errors),traffy:()=>traffyWithRelay(errors,idx),roadSensors,heavyRain,dams,canalFlow,canalLevels,waterGates,social:()=>bluesky(gaz,idx,errors),mediaFeed:()=>mediaFeed(gaz,idx),news:()=>news(gaz,errors,idx)};
   const results=await Promise.allSettled(Object.values(tasks).map(f=>f()));const sources={};const items=[];
   Object.keys(tasks).forEach((name,i)=>{const r=results[i];if(r.status==='fulfilled'){items.push(...r.value);sources[name]={ok:true,count:r.value.length};}else{sources[name]={ok:false,count:0,error:r.reason.message};errors.push({source:name,error:r.reason.message});}});
+  const dropped=dedupeReports(items);if(dropped)sources.traffy.duplicates=dropped;
   let rain=[];try{rain=await rainRate();sources.rainRate={ok:true,count:rain.length};}catch(e){sources.rainRate={ok:false,count:0,error:e.message};errors.push({source:'rainRate',error:e.message});}
   const damRelease=damTimeline(items);
   const out={damRelease,fetchedAt,windowHours:{news:HOURS,social:HOURS,citizen:TRAFFY_HOURS,roadSensors:48},sources,errors,provinces:summarise(items,gaz),items,rainRate:{fields:['lat','lng','mm1h','mm24h'],stations:rain},
-   notes:['รายงานประชาชน (Traffy) เป็นเรื่องร้องเรียน ไม่ได้ตรวจสอบภาคสนาม และครอบคลุมกรุงเทพฯ เป็นหลัก','ข่าวถูกจัดตำแหน่งจากชื่อสถานที่ในข้อความ ละเอียดสุดระดับตำบล/แขวง ไม่ใช่จุดเกิดเหตุจริง','ความลึกจากข่าว/รายงานเป็นตัวเลขที่ผู้เขียนระบุ หรือประมาณจากคำอย่าง "ระดับเข่า" (ทำเครื่องหมายว่าประมาณ)','เซนเซอร์ถนนและเขื่อนอาจล่าช้า ดูเวลาของแต่ละรายการ','ชื่อถนน/ซอย/หมู่บ้านถูกจับคู่กับ OSM เฉพาะเมื่อบริบทชัดเจน ถนนยาวถูกตัดเฉพาะช่วงใกล้พื้นที่ที่ระบุ','โซเชียล: Bluesky และโพสต์ Instagram/TikTok ของบัญชีสำนักข่าว (เก็บโดยโปรเจกต์ flood-social-feed) ไม่รวมโพสต์ของบุคคลทั่วไป','ถนนน้ำท่วมทางการของ กทม. มาจาก now.bangkok.go.th (จุดวัด + รายงานสำนักงานเขต) อัปเดตตามรอบของ กทม.','อัตราการสูบของสถานีสูบน้ำไม่มีข้อมูลสาธารณะ แสดงเฉพาะอัตราการไหลในคลองและระดับน้ำประตูระบายน้ำ']};
+   notes:['รายงานประชาชน (Traffy) เป็นเรื่องร้องเรียน ไม่ได้ตรวจสอบภาคสนาม และครอบคลุมกรุงเทพฯ เป็นหลัก','ข่าวถูกจัดตำแหน่งจากชื่อสถานที่ในข้อความ ละเอียดสุดระดับตำบล/แขวง ไม่ใช่จุดเกิดเหตุจริง','ความลึกจากข่าว/รายงานเป็นตัวเลขที่ผู้เขียนระบุ หรือประมาณจากคำอย่าง "ระดับเข่า" (ทำเครื่องหมายว่าประมาณ)','เซนเซอร์ถนนและเขื่อนอาจล่าช้า ดูเวลาของแต่ละรายการ','ชื่อถนน/ซอย/หมู่บ้านถูกจับคู่กับ OSM เฉพาะเมื่อบริบทชัดเจน ถนนยาวถูกตัดเฉพาะช่วงใกล้พื้นที่ที่ระบุ','โซเชียล: Bluesky (เฉพาะโพสต์ที่ระบุสถานที่ในไทย) และโพสต์ Instagram/TikTok ของบัญชีสำนักข่าว (เก็บโดยโปรเจกต์ flood-social-feed) ไม่รวมโพสต์ของบุคคลทั่วไป','ถนนน้ำท่วมทางการของ กทม. มาจาก now.bangkok.go.th (จุดวัด + รายงานสำนักงานเขต) อัปเดตตามรอบของ กทม.','อัตราการสูบของสถานีสูบน้ำไม่มีข้อมูลสาธารณะ แสดงเฉพาะอัตราการไหลในคลองและระดับน้ำประตูระบายน้ำ']};
   await mkdir(new URL('./data/evidence/',import.meta.url),{recursive:true});await writeFile(new URL('./data/evidence/latest.json',import.meta.url),JSON.stringify(out));
   cache=out;return out;})().finally(()=>{pending=null;});
  return pending;

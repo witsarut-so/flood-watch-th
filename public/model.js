@@ -38,12 +38,23 @@ function describeModel(){
  const skipped=modelRun.domains.filter(d=>d.skipped);
  $('model-balance').textContent=liveDomains().map(d=>`${d.name}: ฝนเฉลี่ยสะสม ${d.scenarios[k].rainMeanTotalMm.toFixed(0)} มม. ใน ${d.times.length} ชม. จาก ${d.rainStations.length} สถานี • น้ำไหลออกขอบพื้นที่ ${(d.scenarios[k].balance.boundaryOutflowM3/1e6).toFixed(1)} ล้าน ลบ.ม. • สมดุลน้ำคลาดเคลื่อน ${(d.scenarios[k].balance.relativeResidual*100).toExponential(0)}%`).join(' | ')+(skipped.length?' | ไม่ได้คำนวณ: '+skipped.map(d=>`${d.name} (${d.skipped})`).join(', '):'');
 }
-// River card: news-reported Chao Phraya Dam release (points) and the lagged inflow the model used (line).
+// Gauge check: water level measured along the river vs the model (same scenario, latest hour with a reading).
+// Model levels have one datum offset removed (DSM heights vs m MSL), shown in the note.
+function drawGauges(d){
+ const box=$('river-gauges');if(!box)return;const gc=d.scenarios?.[scenarioIndex()]?.gaugeChecks;
+ if(!gc?.gauges?.length){box.textContent='';return;}
+ const f=v=>v==null?'–':v.toFixed(2),rows=gc.gauges.map(g=>{let i=g.obsM.length-1;while(i>=0&&g.obsM[i]==null)i--;const o=i>=0?g.obsM[i]:null,m=i>=0?g.simM[i]:g.simM.at(-1),e=o==null||m==null?null:m-o;
+  return `<tr><td>${esc(g.code)} ${esc(g.name)}</td><td>${f(o)}</td><td>${f(m)}</td><td class="${e==null?'':Math.abs(e)<=.3?'ok':Math.abs(e)<=.8?'warn':'bad'}">${e==null?'–':(e>0?'+':'')+e.toFixed(2)}</td><td>${f(g.bankM)}</td></tr>`;}).join('');
+ box.innerHTML=`<table class="gauge-table"><thead><tr><th>สถานีวัดระดับน้ำ</th><th>วัดจริง</th><th>แบบจำลอง</th><th>ต่าง</th><th>ตลิ่ง</th></tr></thead><tbody>${rows}</tbody></table><p class="note">หน่วย ม.รทก. ณ ชั่วโมงล่าสุดที่มีค่าวัด • คลาดเฉลี่ย ${gc.rmseM.toFixed(2)} ม. (หลังปรับฐานระดับ ${gc.offsetM>0?'+':''}${gc.offsetM.toFixed(2)} ม.) • ที่มา: กรมชลประทาน/ThaiWater</p>`;}
+// River card: inflow the model used (line) and news-reported Chao Phraya Dam release (points).
 function drawRiver(){
  const d=liveDomains().find(x=>x.river),svg=$('dam-chart');if(!svg)return;svg.replaceChildren();
  if(!d){$('river-text').textContent='รอบนี้ไม่มีข้อมูลแม่น้ำ';return;}
  const rv=d.river,pts=(typeof evidenceData!=='undefined'&&evidenceData?.damRelease?.points)||rv.newsPoints||[];
- $('river-text').textContent=rv.inflowM3s?`น้ำเข้าแม่น้ำ ${Math.min(...rv.inflowM3s).toLocaleString('th-TH')}–${Math.max(...rv.inflowM3s).toLocaleString('th-TH')} ลบ.ม./วินาที ตามอัตราระบายท้าย${rv.inflowFrom}ที่รายงานในข่าว หน่วง ${rv.lagHours} ชม. (ระยะเดินทางถึงขอบพื้นที่) • ร่องน้ำลึกสมมติ ${rv.channelDepthM} ม. • น้ำในร่องแม่น้ำไม่นับเป็นน้ำท่วม`:'ไม่พบตัวเลขอัตราระบายเขื่อนในข่าวช่วงนี้ แม่น้ำรับเฉพาะน้ำฝนในพื้นที่';
+ const range=rv.inflowM3s?`${Math.round(Math.min(...rv.inflowM3s)).toLocaleString('th-TH')}–${Math.round(Math.max(...rv.inflowM3s)).toLocaleString('th-TH')} ลบ.ม./วินาที`:'';
+ const src=rv.inflowSource==='gauge'?`วัดจริงที่สถานี ${rv.inflowStation.code} ${rv.inflowStation.name} (กรมชลประทาน ผ่าน ThaiWater) หน่วง ${rv.lagHours} ชม. ถึงขอบพื้นที่`:rv.inflowSource==='news'?`สถานีวัดไม่มีข้อมูล จึงใช้อัตราระบายท้าย${rv.inflowFrom}ที่รายงานในข่าว หน่วง ${rv.lagHours} ชม.`:'';
+ $('river-text').textContent=rv.inflowM3s?`น้ำเข้าแม่น้ำ ${range} ${src} • ร่องน้ำลึก ${rv.channelDepthM} ม. ${rv.channelDepthCalibrated?'(ปรับให้ระดับน้ำตรงกับสถานีวัด)':'(ค่าสมมติ)'} • น้ำในร่องแม่น้ำไม่นับเป็นน้ำท่วม`:'ไม่มีข้อมูลน้ำไหลเข้าแม่น้ำช่วงนี้ แม่น้ำรับเฉพาะน้ำฝนในพื้นที่';
+ drawGauges(d);
  const ns='http://www.w3.org/2000/svg',el=(n,a)=>{const e=document.createElementNS(ns,n);for(const k in a)e.setAttribute(k,a[k]);return e;};
  const inflow=(rv.inflowM3s||[]).map((q,i)=>[Date.parse(d.times[i])-rv.lagHours*3600000,q]);  // plotted at dam time
  const all=[...pts.map(p=>[Date.parse(p.at),p.m3s]),...inflow];if(!all.length)return;

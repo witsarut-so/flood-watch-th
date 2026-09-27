@@ -25,9 +25,27 @@ export async function modelInputs({archive=false}={}){if(cached&&Date.now()-Date
  bundle.domainBbox=bbox;const ids=new Set(),candidates=[];for(const d of domains)for(const st of spreadStations(bundle.rain,d.bbox))if(!ids.has(st.id)){ids.add(st.id);candidates.push(st);}
  const histories=await mapLimit(candidates,4,s=>fetchData('rain_24h_graph?station_id='+encodeURIComponent(s.id)));
  for(let i=0;i<histories.length;i++){const h=histories[i];if(h.status==='fulfilled'&&h.value.result==='OK'&&Array.isArray(h.value.data)){bundle.rainHistory.push({...candidates[i],samples:h.value.data.map(r=>({observedAt:time(r.rainfall_datetime),mm:num(r.rainfall_value)}))});}else bundle.errors.push({source:'rain_history',error:'Unable to load history for station '+candidates[i].id});}
+ bundle.riverGauges=await riverGauges(domains).catch(err=>{bundle.errors.push({source:'river_gauges',error:err.message});return [];});
  await mkdir(root,{recursive:true});const stamp=bundle.fetchedAt.replace(/[:.]/g,'-');const rawJson=JSON.stringify({feeds:raw.map(r=>r.status==='fulfilled'?r.value:{error:r.reason.message}),histories:histories.map(r=>r.status==='fulfilled'?r.value:{error:r.reason.message})});bundle.rawSha256=createHash('sha256').update(rawJson).digest('hex');if(archive){await writeFile(new URL(stamp+'-raw.json',root),rawJson);await writeFile(new URL(stamp+'-normalized.json',root),JSON.stringify(bundle));}await writeFile(new URL('latest.json',root),JSON.stringify(bundle));cached=bundle;return bundle;})();
  try{return await pending;}finally{pending=null;}
 }
+// Water-level gauges along modelled rivers (ThaiWater waterlevel_load: level m MSL, bank levels, discharge) with their
+// hourly history (waterlevel_graph). Python keeps only those next to the river channel.
+const wlNum=v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null;
+async function riverGauges(domains){
+ const cfg=JSON.parse(await readFile(new URL('./model/domains.json',import.meta.url))).domains.filter(d=>d.river);if(!cfg.length)return [];
+ const rows=(await fetchData('waterlevel_load')).waterlevel_data?.data||[],out=[];
+ for(const c of cfg){const meta=domains.find(m=>m.id===c.id);if(!meta)continue;const [w,s,e,n]=meta.bbox,re=new RegExp(c.river.gaugeCodes);
+  const pick=rows.filter(r=>{const st=r.station||{},lat=wlNum(st.tele_station_lat),lng=wlNum(st.tele_station_long);return re.test(st.tele_station_oldcode||'')&&lat>=s&&lat<=n&&lng>=w&&lng<=e;});
+  const hist=await mapLimit(pick,4,r=>fetchData('waterlevel_graph?station_type=tele_waterlevel&station_id='+encodeURIComponent(r.station.id)));
+  pick.forEach((r,i)=>{const st=r.station,g=hist[i].status==='fulfilled'?hist[i].value?.data?.graph_data||[]:[];
+   out.push({domain:c.id,code:st.tele_station_oldcode,name:st.tele_station_name?.th||'',lat:wlNum(st.tele_station_lat),lng:wlNum(st.tele_station_long),agency:r.agency?.agency_shortname?.th||'',
+    bankM:wlNum(st.min_bank)??Math.min(...[wlNum(st.left_bank),wlNum(st.right_bank)].filter(v=>v!==null)),groundM:wlNum(st.ground_level),
+    series:g.map(x=>({at:time(x.datetime),wl:wlNum(x.value),q:wlNum(x.discharge)})).filter(x=>x.at&&(x.wl!==null||x.q!==null))});});
+ }
+ return out;
+}
+
 // Model domains prepared by model/prepare_terrain.py (data/domains/<id>/metadata.json).
 export async function domainMetadata(){const list=JSON.parse(await readFile(new URL('./model/domains.json',import.meta.url))).domains;const out=[];for(const d of list){try{out.push(JSON.parse(await readFile(new URL(`./data/domains/${d.id}/metadata.json`,import.meta.url))));}catch{}}return out;}
 const unionBbox=bs=>bs.length?[Math.min(...bs.map(b=>b[0])),Math.min(...bs.map(b=>b[1])),Math.max(...bs.map(b=>b[2])),Math.max(...bs.map(b=>b[3]))]:DEFAULT_BBOX;

@@ -42,7 +42,10 @@
     "inflowFrom": "เขื่อนเจ้าพระยา",
     "lagHours": 20,
     "channelDepthM": 5,
-    "note": "Chainat dam -> Ayutthaya ~24 h (Spring News, 2022); the domain edge is just north of Ayutthaya"
+    "note": "Inflow: measured discharge at C.7A Ban Bang Kaeo (Ang Thong, ~12 km inside the north edge; 2 h). Fallback: news-reported Chao Phraya Dam release delayed lagHours (Chainat -> Ayutthaya ~24 h, Spring News 2022). Gauges matching gaugeCodes near the channel are used to check water levels.",
+    "inflowStation": "C.7A",
+    "inflowLagHours": 2,
+    "gaugeCodes": "^(C\\.|CPY)"
    }
   },
   {

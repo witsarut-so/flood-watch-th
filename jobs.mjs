@@ -30,6 +30,18 @@ export async function runEvidenceJob(){
 // Thai networks and upload data/evidence/thai.json.gz to release "live". A source that fails this round keeps its
 // previous successful part, so one bad pull never blanks the map.
 const RELAY_REPO=process.env.RELAY_REPO||'witsarut-so/flood-watch-th',RELAY_GH_USER=process.env.RELAY_GH_USER||'witsarut-so';
+// Start the evidence workflow unless one is queued/running, and the model workflow when the last one started
+// MODEL_EVERY_H or more ago. Both share the concurrency group live-data, so they never overlap.
+const MODEL_EVERY_H=2;
+async function dispatchWorkflows(env){
+ const list=async wf=>JSON.parse((await run('gh',['run','list','-R',RELAY_REPO,'-w',wf,'-L','1','--json','status,createdAt'],{env})).stdout)[0];
+ const out=[];
+ for(const wf of ['evidence.yml','model.yml']){
+  const last=await list(wf),busy=last&&last.status!=='completed',age=last?(Date.now()-Date.parse(last.createdAt))/3600000:Infinity;
+  if(busy||(wf==='model.yml'&&age<MODEL_EVERY_H-.1))continue;
+  await run('gh',['workflow','run',wf,'-R',RELAY_REPO],{env});out.push(wf);}
+ return out;}
+
 export async function runThaiJob({upload=true}={}){
  const {gaz,idx}=await textContext(),file=root+'data/evidence/thai.json.gz',now=new Date().toISOString();
  let prev={};try{prev=JSON.parse(gunzipSync(await readFile(file)));}catch{}
@@ -38,7 +50,9 @@ export async function runThaiJob({upload=true}={}){
  try{const items=await traffyDirect(errors,idx);if(!items.length||items[0].stale)throw Error(errors.at(-1)?.error||'no fresh items');out.traffy={ok:true,fetchedAt:now,items};report.traffy=items.length;}catch(e){report.traffy='failed: '+String(e.message).slice(0,120);}
  await mkdir(root+'data/evidence',{recursive:true});await writeFile(file,gzipSync(JSON.stringify(out)));
  if(upload){const token=(await run('gh',['auth','token','-u',RELAY_GH_USER])).stdout.trim();
-  await run('gh',['release','upload','live',file,'--clobber','-R',RELAY_REPO],{env:{...process.env,GH_TOKEN:token}});report.uploaded=true;}
+  const env={...process.env,GH_TOKEN:token};await run('gh',['release','upload','live',file,'--clobber','-R',RELAY_REPO],{env});report.uploaded=true;
+  // GitHub's cron often runs late or skips; while this Mac is on it is the clock. Cron stays as the fallback.
+  try{report.dispatched=await dispatchWorkflows(env);}catch(e){report.dispatched='failed: '+String(e.message).slice(0,120);}}
  return {fetchedAt:now,...report};
 }
 
@@ -59,9 +73,9 @@ export async function runModelJob({force=false,ifOlderThanMinutes=0}={}){
  running=(async()=>{
   const runId=new Date().toISOString().replace(/[:.]/g,'-');
   const data={...await modelInputs()};
-  // Point observations for validation only (not assimilated): citizen reports, BMA official flooded roads/reports (wet), road sensors (0 = dry).
+  // Point observations for validation only (not assimilated): open citizen reports (resolved tickets say nothing about the water now), BMA official flooded roads/reports (wet), road sensors (0 = dry).
   // News-outlet social posts that name a specific road (resolved to OSM) add wet points at that road.
-  try{const ev=await readJson(LIVE+'evidence.json');data.observations=ev.items.filter(i=>i.kind==='citizen'||(i.kind==='sensor'&&!i.subkind)||((i.subkind==='bma-road'||i.subkind==='bma-report')&&i.precision==='point'&&Number.isFinite(i.lat))).map(i=>({kind:i.subkind?.startsWith('bma')?'bma':i.kind,lat:i.lat,lng:i.lng,at:i.at,wet:i.kind==='citizen'||i.subkind?.startsWith('bma')||i.depthCm>=5}));for(const i of ev.items)if(i.subkind==='media')for(const g of i.geo||[])if(g.drawn&&g.lines?.[0]?.length){const p=g.lines[0][Math.floor(g.lines[0].length/2)];data.observations.push({kind:'media',lat:p[0],lng:p[1],at:i.at,wet:true});}data.damRelease=ev.damRelease||null;data.evidenceFetchedAt=ev.fetchedAt;}
+  try{const ev=await readJson(LIVE+'evidence.json');data.observations=ev.items.filter(i=>(i.kind==='citizen'&&i.status!=='เสร็จสิ้น')||(i.kind==='sensor'&&!i.subkind)||((i.subkind==='bma-road'||i.subkind==='bma-report')&&i.precision==='point'&&Number.isFinite(i.lat))).map(i=>({kind:i.subkind?.startsWith('bma')?'bma':i.kind,lat:i.lat,lng:i.lng,at:i.at,wet:i.kind==='citizen'||i.subkind?.startsWith('bma')||i.depthCm>=5}));for(const i of ev.items)if(i.subkind==='media')for(const g of i.geo||[])if(g.drawn&&g.lines?.[0]?.length){const p=g.lines[0][Math.floor(g.lines[0].length/2)];data.observations.push({kind:'media',lat:p[0],lng:p[1],at:i.at,wet:true});}data.damRelease=ev.damRelease||null;data.evidenceFetchedAt=ev.fetchedAt;}
   catch{data.observations=[];}
   await mkdir(RUNS,{recursive:true});const input=RUNS+runId+'-input.json',out=LIVE+'model/'+runId+'/';
   await writeFile(input,JSON.stringify(data));

@@ -54,6 +54,16 @@ class OpenBoundaryTests(unittest.TestCase):
   self.assertEqual(out['balance']['boundaryOutflowM3'],0)
   self.assertAlmostEqual(out['depth'].sum(),h.sum())
 class RiverTermsTests(unittest.TestCase):
+ def test_deep_channel_stays_wet_and_carries_inflow(self):
+  # a 6 m deep, 3-cell wide channel fed 1500 m3/s: the old diffusive flux oscillated here (half the cells dry)
+  z=np.tile(np.linspace(2,0,60),(9,1))+2.;z[3:6,:]-=6.;h=np.zeros_like(z);h[3:6,1:]=6.
+  src=np.zeros_like(z);src[3:6,1]=1500*3.6e6/(3*1e4);wall=np.zeros(z.shape,bool);wall[3:6,0]=True
+  for nb in (False,True):
+   out=simulate(z,0,duration_s=6*3600,dx=100,dt=15,infiltration_mm_h=0,drainage_mm_h=0,initial=h,capture=(),open_boundary=True,inflow_mm_h=src,wall=wall,use_numba=nb)
+   ch=out['depth'][3:6,2:-1];self.assertGreater(float(ch.min()),1.)
+   self.assertEqual(float(simulate(z,50,duration_s=600,dx=100,dt=15,initial=out['depth'],wall=wall,use_numba=nb)['depth'][wall].max()),0.)
+   self.assertLess(out['balance']['relativeResidual'],1e-9);self.assertGreater(out['balance']['boundaryOutflowM3'],.5*out['balance']['inflowM3'])
+
  def test_inflow_sink_and_cell_drainage_balance_numba_matches_numpy(self):
   rng=np.random.default_rng(3);z=np.tile(np.linspace(3,0,20),(12,1))+rng.random((12,20))*.2
   src=np.zeros_like(z);src[5:7,0]=500.  # river entering on the west

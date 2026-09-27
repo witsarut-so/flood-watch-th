@@ -13,6 +13,7 @@ import numpy as np
 import rasterio
 from rasterio.warp import transform
 from solver import simulate
+import river as rv_mod
 ROOT=Path(__file__).resolve().parents[1]
 THRESHOLD_M=.02;DRAINAGE=[0.,3.,8.];INFILTRATION=2.;MAX_HOURS=36  # rain_24h_graph returns ~37 h
 
@@ -45,7 +46,8 @@ def validate(obs,depth,mask,affine,crs,times):
     """Compare point observations with the modelled depth at the nearest simulated hour.
     Wet = citizen flood report or road sensor >= 5 cm; dry = road sensor reading 0. Hit if any cell in the
     3x3 neighbourhood (+-100 m, for position error and road-in-cell) is >= threshold; a dry point is a false
-    alarm if its own cell is wet. baseRate = share of mask cells that would count as a hit by chance."""
+    alarm if its own cell is wet. Readings up to 2 h after the last hour are compared with the last hour: road sensors
+    only report their current value, and rain data lags ~1 h, so without this every dry reading would be dropped. baseRate = share of mask cells that would count as a hit by chance."""
     if not obs:return {'n':0}
     xs,ys=transform('EPSG:4326',crs,[o['lng'] for o in obs],[o['lat'] for o in obs])
     t0=times[0]-timedelta(hours=1);th=round(THRESHOLD_M*100)
@@ -55,7 +57,7 @@ def validate(obs,depth,mask,affine,crs,times):
     inside=mask>0;base_by_frame=[float(near[f][inside].mean()) if inside.any() else 0. for f in range(len(times))];res={'positives':0,'hits':0,'negatives':0,'falseAlarms':0,'baseRate':[],'kinds':{}}
     for o,x,y in zip(obs,xs,ys):
         at=datetime.fromisoformat(o['at'].replace('Z','+00:00'))
-        if not t0<=at<=times[-1]+timedelta(minutes=30):continue
+        if not t0<=at<=times[-1]+timedelta(hours=2):continue
         f=min(range(len(times)),key=lambda i:abs((times[i]-at).total_seconds()))
         c=int((x-affine.c)//affine.a);r=int((y-affine.f)//affine.e)
         if not(0<=r<mask.shape[0] and 0<=c<mask.shape[1]) or not inside[r,c]:continue
@@ -74,6 +76,7 @@ def domain_bundle(bundle,meta,pad=.2):
 # Middle drainage scenario inside Bangkok: BMA pumping stations discharge ~1,300 m3/s to the Chao Phraya (both banks),
 # spread over the Bangkok cells of the grid (ThaiPublica interview with BMA, 2025). Elsewhere the 3 mm/h assumption stays.
 BMA_PUMPING_M3S=1300.
+MIN_DRY=20  # dry sensor readings needed before false alarms count in the score
 SPINUP_H=24  # river-only warm-up so the channel is already flowing when the rain window starts
 
 def dam_series(points,times,lag_h):
@@ -106,16 +109,18 @@ def run_task(task):
     # drainage per cell: scenario value, with the Bangkok pumping capacity in the middle scenario
     drn=np.full(z.shape,float(drain));bkk=[c for c,nm in names.items() if nm=='กรุงเทพฯ']
     if drain==3. and bkk:cells=(mask==bkk[0]);drn[cells]=BMA_PUMPING_M3S/(cells.sum()*dx*dx)*3.6e6
-    inf=np.full(z.shape,INFILTRATION);h=np.zeros_like(z);inflow=0.;sink=None;channel=np.zeros(z.shape,dtype=bool);qs=None
+    inf=np.full(z.shape,INFILTRATION);h=np.zeros_like(z);inflow=0.;sink=None;wall=None;flux=None;channel=np.zeros(z.shape,dtype=bool);qs=None
     if river:
         with rasterio.open(base/'river.tif') as src:rv=src.read(1)
-        channel=rv>0;z=z.copy();z[channel]-=river['channelDepthM'];h[channel]=river['channelDepthM']  # channel filled to its normal (DSM) level
+        channel=rv>0;z,ref=rv_mod.channel_bed(z,rv,river['channelDepthM']);h[channel]=(ref-z)[channel]  # smoothed bed, filled to the dry-season (DSM) level
+        checks=rv_mod.near_channel(river.get('gauges',[]),channel,affine,crs)
         drn[channel]=0;inf[channel]=0
         # sea: low cells outside the provinces near the southern edge are held at sea level (dry sink)
         R=z.shape[0];sink=np.zeros(z.shape,dtype=np.uint8);sink[int(R*.9):,:]=((z[int(R*.9):,:]<=.5)&(mask[int(R*.9):,:]==0)&~channel[int(R*.9):,:])
-        qs=river['q'];inlet=rv==2;per_cell=lambda q:np.where(inlet,q*3.6e6/(inlet.sum()*dx*dx),0.)
+        qs=river['q'];inlet,wall=rv_mod.inlet(rv);h[wall]=0;per_cell=lambda q:np.where(inlet,q*3.6e6/(inlet.sum()*dx*dx),0.)
         if qs:
-            out=simulate(z,0,duration_s=SPINUP_H*3600,dx=dx,dt=dt,infiltration_mm_h=inf,drainage_mm_h=drn,initial=h,capture=(SPINUP_H*3600,),open_boundary=True,inflow_mm_h=per_cell(river['q0']),sink=sink);h=out['depth']
+            out=simulate(z,0,duration_s=SPINUP_H*3600,dx=dx,dt=dt,infiltration_mm_h=inf,drainage_mm_h=drn,initial=h,capture=(SPINUP_H*3600,),open_boundary=True,inflow_mm_h=per_cell(river['q0']),sink=sink,wall=wall);h=out['depth'];flux=out['flux']
+    sim_fb={g['code']:[] for g in (checks if river else [])}
     balance={'initialM3':float(h.sum()*dx*dx),'rainM3':0.,'inflowM3':0.,'infiltrationM3':0.,'drainageM3':0.,'boundaryOutflowM3':0.,'sinkM3':0.}
     depth=np.zeros((len(times),)+z.shape,dtype='uint8');frames=[];rain_means=[]
     for i,hour_values in enumerate(values):
@@ -123,8 +128,9 @@ def run_task(task):
         avail=[j for j,v in enumerate(hour_values) if v is not None]
         rain=np.tensordot(np.asarray([hour_values[j] for j in avail],dtype='float32'),weights[avail],axes=1)/weights[avail].sum(axis=0);rain_means.append(float(rain[inside].mean()))
         if river and qs:inflow=per_cell(qs[i])
-        out=simulate(z,rain,dx=dx,dt=dt,infiltration_mm_h=inf,drainage_mm_h=drn,initial=h,capture=(3600,),open_boundary=True,inflow_mm_h=inflow,sink=sink);h=out['depth']
+        out=simulate(z,rain,dx=dx,dt=dt,infiltration_mm_h=inf,drainage_mm_h=drn,initial=h,capture=(3600,),open_boundary=True,inflow_mm_h=inflow,sink=sink,wall=wall,flux=flux);h=out['depth'];flux=out['flux']
         for key in ['rainM3','inflowM3','infiltrationM3','drainageM3','boundaryOutflowM3','sinkM3']:balance[key]+=out['balance'][key]
+        for g in (checks if river else []):sim_fb[g['code']].append(rv_mod.surface_sim(g,z,h))
         # the river channel itself is not "flooding": only water outside it is shown and counted
         shown=np.where(inside&~channel,h,0);depth[i]=np.minimum(np.round(shown*100),255).astype('uint8')
         with gzip.open(Path(out_dir)/f'{d}-s{k}-f{i}.bin.gz','wb',compresslevel=6) as f:f.write(depth[i].tobytes())
@@ -136,12 +142,19 @@ def run_task(task):
     if balance['relativeResidual']>1e-8:raise ArithmeticError(f'Water balance failed for {d}')
     check=validate(obs,depth,mask,affine,crs,[datetime.fromisoformat(t) for t in times])
     bkk_rate=float(drn[mask==bkk[0]].mean()) if (bkk and drain==3.) else None
-    return d,k,{'id':str(int(drain)),'index':k,'drainageMmH':drain,'bangkokDrainageMmH':bkk_rate,'infiltrationMmH':INFILTRATION,'roughness':.06,'rainMeanTotalMm':float(sum(rain_means)),'balance':balance,'validation':check,'frames':frames}
+    gauge_checks=None
+    if river and checks:
+        tt=[datetime.fromisoformat(t) for t in times];obs={g['code']:rv_mod.hourly(g['series'],tt,'wl') for g in checks};cmp=rv_mod.compare(obs,sim_fb)
+        if cmp:gauge_checks={'offsetM':cmp['offsetM'],'rmseM':cmp['rmseM'],'gauges':[{'code':g['code'],'name':g['name'],'lat':g['lat'],'lng':g['lng'],'distM':g['distM'],'bankM':g['bankM'],
+            'obsM':obs[g['code']],'simM':[round(v+cmp['offsetM'],2) for v in sim_fb[g['code']]],'meanErrorM':cmp['meanErrorM'].get(g['code'])} for g in checks]}
+    return d,k,{'id':str(int(drain)),'index':k,'gaugeChecks':gauge_checks,'drainageMmH':drain,'bangkokDrainageMmH':bkk_rate,'infiltrationMmH':INFILTRATION,'roughness':.06,'rainMeanTotalMm':float(sum(rain_means)),'balance':balance,'validation':check,'frames':frames}
 
 def skill(v):
-    """Hit rate above chance for the same wet area. Plain hit rate would always favour the wettest map."""
+    """Hit rate above chance for the same wet area, minus the false-alarm rate on dry sensors when there are enough
+    of them. Plain hit rate would always favour the wettest map; plain hit-minus-false-alarm (Peirce) too, here,
+    because wet points (citizen reports) and dry points (road sensors) are different places."""
     if not v.get('positives') or v.get('baseRate') is None:return None
-    return v['hitRate']-v['baseRate']
+    return v['hitRate']-v['baseRate']-(v['falseAlarmRate'] if (v.get('negatives') or 0)>=MIN_DRY else 0.)
 
 def main(input_path,out_dir):
     bundle=json.loads(Path(input_path).read_text());out_dir=Path(out_dir);out_dir.mkdir(parents=True,exist_ok=True)
@@ -163,11 +176,21 @@ def main(input_path,out_dir):
             'observationsUsed':{k:sum(1 for o in obs if o['kind']==k) for k in {o['kind'] for o in obs}},'scenarios':[None]*len(DRAINAGE)})
         river=None
         if dom.get('river') and (ROOT/'data/domains'/dom['id']/'river.tif').exists():
-            cfg=dom['river'];pts=(bundle.get('damRelease') or {}).get('points',[])
-            q=dam_series(pts,times,cfg['lagHours']);q0=dam_series(pts,[times[0]-timedelta(hours=SPINUP_H)],cfg['lagHours']) if q else None
-            river={**cfg,'q':q,'q0':q0[0] if q0 else None}
-            domains[-1]['river']={'name':cfg['name'],'inflowFrom':cfg['inflowFrom'],'lagHours':cfg['lagHours'],'channelDepthM':cfg['channelDepthM'],'spinupHours':SPINUP_H if q else 0,
-                'inflowM3s':q,'newsPoints':[p for p in pts if p.get('type')=='actual'],'note':'Inflow = Chao Phraya Dam release reported in news, delayed by the travel time; channel depth is an assumption (no bathymetry).' if q else 'No dam release figures in the news window: channel only carries local rain.'}
+            cfg=dict(dom['river']);cal=ROOT/'data/domains'/dom['id']/'river-calibration.json'
+            if cal.exists():cfg['channelDepthM']=json.loads(cal.read_text())['channelDepthM'];cfg['calibrated']=True
+            gauges=[g for g in bundle.get('riverGauges',[]) if g.get('domain')==dom['id']]
+            q,g_in=rv_mod.gauge_inflow(gauges,cfg.get('inflowStation'),times,cfg.get('inflowLagHours',0))
+            q0=rv_mod.gauge_inflow(gauges,cfg.get('inflowStation'),[times[0]-timedelta(hours=SPINUP_H)],cfg.get('inflowLagHours',0))[0] if q else None
+            src='gauge'
+            if not q:
+                pts=(bundle.get('damRelease') or {}).get('points',[]);src='news'
+                q=dam_series(pts,times,cfg['lagHours']);q0=dam_series(pts,[times[0]-timedelta(hours=SPINUP_H)],cfg['lagHours']) if q else None
+            river={**cfg,'q':q,'q0':q0[0] if q0 else (q[0] if q else None),'gauges':gauges}
+            domains[-1]['river']={'name':cfg['name'],'inflowSource':src if q else None,
+                'inflowStation':{'code':g_in['code'],'name':g_in['name'],'lagHours':cfg.get('inflowLagHours',0)} if src=='gauge' and g_in else None,
+                'inflowFrom':cfg['inflowFrom'],'lagHours':cfg['lagHours'] if src=='news' else cfg.get('inflowLagHours',0),'channelDepthM':cfg['channelDepthM'],'channelDepthCalibrated':bool(cfg.get('calibrated')),'spinupHours':SPINUP_H if q else 0,
+                'inflowM3s':q,'newsPoints':[p for p in (bundle.get('damRelease') or {}).get('points',[]) if p.get('type')=='actual'],
+                'note':{'gauge':'Inflow = discharge measured at the gauge (ThaiWater/RID), hourly.','news':'Gauge unavailable: inflow = Chao Phraya Dam release reported in news, delayed by the travel time.'}.get(src if q else '', 'No inflow data: channel only carries local rain.')}
         for k,drain in enumerate(DRAINAGE):tasks.append([dom['id'],k,drain,list(zip(xs,ys)),values,iso,obs,str(out_dir),river])
     # a few processes, each running the numba kernel on the remaining cores (no oversubscription)
     cpus=os.cpu_count() or 2;workers=max(1,min(len(tasks),cpus//2,3));threads=max(1,cpus//workers)
@@ -179,7 +202,7 @@ def main(input_path,out_dir):
         for sc in dom['scenarios']:sc['validation']['skill']=skill(sc['validation'])
         scored=[(sc['validation']['skill'],sc['id']) for sc in dom['scenarios'] if sc['validation'].get('skill') is not None]
         dom['bestScenario']=max(scored)[1] if scored else None
-    result={'kind':'experimental-rainfall-replay','engine':'storage-cell-routing-v2 (open edges; not SFINCS/SWMM)','operational':False,'issuedAt':datetime.now(timezone.utc).isoformat(),
+    result={'kind':'experimental-rainfall-replay','engine':'storage-cell-routing-v3 (local-inertial, Bates et al. 2010; open edges; not SFINCS/SWMM)','operational':False,'issuedAt':datetime.now(timezone.utc).isoformat(),
         'inputFetchedAt':bundle['fetchedAt'],'inputSha256':bundle.get('rawSha256'),'thresholdM':THRESHOLD_M,'drainageScenariosMmH':DRAINAGE,
         'depthFiles':'<domain>-s<scenario>-f<frame>.bin.gz: gzip uint8 cm, row-major domain grid, 255 = >=255 cm',
         'rainTimeAssumption':'Provider hourly totals interpreted as the hour ending at timestamp in Asia/Bangkok.','rainInterpolation':'inverse distance squared between the stations reporting each hour (min 1 km); missing station-hours are interpolated from the others, never zero-filled; not radar',

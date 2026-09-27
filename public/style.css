@@ -71,3 +71,9 @@ footer{max-width:1600px;margin:0 auto;padding:0 max(16px,3%) 28px;font-size:11px
 .f-window{display:block;font-size:11px;line-height:1.5;color:#6b7f79}.f-window.warn{color:#9c5b00;background:#fff4e0;padding:4px 6px;border-radius:6px}
 .river-card{background:#eef6fb;border-radius:10px;padding:12px 14px;margin:10px 0}.river-card h3{margin:0 0 4px}.dam-chart{width:100%;height:auto;max-height:180px}
 .dam-legend{font-size:11px;color:#5f746e;display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;margin:4px 0 0}.dam-legend .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:-1px}.dot.actual{background:#1971c2}.dot.cap{background:#e8590c}.dot.plan{background:#adb5bd}.dam-legend .line{display:inline-block;width:18px;height:3px;background:#0b7285;margin-right:4px;vertical-align:2px}
+
+.gauge-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:10px}
+.gauge-table th,.gauge-table td{padding:4px 6px;border-bottom:1px solid #e6ecea;text-align:right;white-space:nowrap}
+.gauge-table th:first-child,.gauge-table td:first-child{text-align:left;white-space:normal}
+.gauge-table td.ok{color:#2b8a3e}.gauge-table td.warn{color:#e67700}.gauge-table td.bad{color:#c92a2a}
+#river-gauges{overflow-x:auto}

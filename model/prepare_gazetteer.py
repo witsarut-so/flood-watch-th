@@ -6,7 +6,7 @@ because most OSM district relations carry no province tag.
 Output data/gazetteer/th-admin.json: [{"id","level","name","short","en","province","district","lat","lng"}]
 Data (c) OpenStreetMap contributors, ODbL.
 """
-import json,time,urllib.parse,urllib.request
+import json,sys,time,urllib.parse,urllib.request
 from datetime import datetime,timezone
 from pathlib import Path
 import numpy as np
@@ -56,7 +56,23 @@ def english(tags):
     for w in (' Province',' District',' Subdistrict','Amphoe ','Khet ','Tambon ','Khwaeng '):en=en.replace(w,'')
     return en.strip()
 
+def anchor_provinces(rows):
+    """Overpass `center` is the bbox centre of the relation. For provinces that is often useless (Bangkok's
+    relation reaches into the sea: 13.587,100.633 off Samut Prakan), so a province's point is moved to its capital
+    district (อำเภอเมือง<name>, Bangkok: พระนคร). Keeps the bbox centre when no capital district is found."""
+    cap={r['province']:r for r in rows if r['level']==6 and (r['short'] in('เมือง'+r['province'],r['province']) or (r['province']=='กรุงเทพฯ' and r['short']=='พระนคร'))}
+    # relations of neighbouring countries that overlap the TH area filter (e.g. Myanmar's Tanintharyi Region)
+    foreign={r['short'] for r in rows if r['level']==4 and (r.get('en') or '').endswith((' Region',' State',' Division'))}
+    rows[:]=[r for r in rows if r['province'] not in foreign]
+    moved=0
+    for r in rows:
+        c=cap.get(r['short']) if r['level']==4 else None
+        if c:r['lat'],r['lng']=c['lat'],c['lng'];r['anchor']=c['short'];moved+=1
+    return moved
+
 if __name__=='__main__':
+    if sys.argv[1:]==['--anchors']:  # fix an existing th-admin.json in place
+        f=ROOT/'data/gazetteer/th-admin.json';doc=json.loads(f.read_text());print('moved',anchor_provinces(doc['places']));f.write_text(json.dumps(doc,ensure_ascii=False,separators=(',',':')));sys.exit()
     elements=overpass('4|6|8')
     by={l:[e for e in elements if e['tags'].get('admin_level')==l and 'center' in e] for l in '468'}
     prov_ids=[e['id'] for e in by['4']];dist_ids=[e['id'] for e in by['6']]
@@ -72,6 +88,7 @@ if __name__=='__main__':
             if level==4:p=short
             if p is None:continue  # centre outside rasterised provinces (offshore); unusable for disambiguation
             rows.append({'id':e['id'],'level':level,'name':name,'short':short,'en':english(e['tags']),'province':p,'district':d,'lat':round(lat,5),'lng':round(lng,5)})
+    anchor_provinces(rows)
     dest=ROOT/'data/gazetteer';dest.mkdir(parents=True,exist_ok=True)
     doc={'source':'OpenStreetMap contributors (ODbL) via Overpass + Nominatim','builtAt':datetime.now(timezone.utc).isoformat(),'places':rows}
     (dest/'th-admin.json').write_text(json.dumps(doc,ensure_ascii=False,separators=(',',':')))
