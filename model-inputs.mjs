@@ -27,6 +27,7 @@ export async function modelInputs({archive=false}={}){if(cached&&Date.now()-Date
  for(let i=0;i<histories.length;i++){const h=histories[i];if(h.status==='fulfilled'&&h.value.result==='OK'&&Array.isArray(h.value.data)){bundle.rainHistory.push({...candidates[i],samples:h.value.data.map(r=>({observedAt:time(r.rainfall_datetime),mm:num(r.rainfall_value)}))});}else bundle.errors.push({source:'rain_history',error:'Unable to load history for station '+candidates[i].id});}
  bundle.riverGauges=await riverGauges(domains).catch(err=>{bundle.errors.push({source:'river_gauges',error:err.message});return [];});
  bundle.canalLimits=raw[1].status==='fulfilled'?canalLimits(raw[1].value,bbox):[];
+ bundle.waterwayLimits=await fetchData('waterlevel_load').then(d=>waterwayLimits(d,bbox)).catch(err=>{bundle.errors.push({source:'waterway_limits',error:err.message});return [];});
  await mkdir(root,{recursive:true});const stamp=bundle.fetchedAt.replace(/[:.]/g,'-');const rawJson=JSON.stringify({feeds:raw.map(r=>r.status==='fulfilled'?r.value:{error:r.reason.message}),histories:histories.map(r=>r.status==='fulfilled'?r.value:{error:r.reason.message})});bundle.rawSha256=createHash('sha256').update(rawJson).digest('hex');if(archive){await writeFile(new URL(stamp+'-raw.json',root),rawJson);await writeFile(new URL(stamp+'-normalized.json',root),JSON.stringify(bundle));}await writeFile(new URL('latest.json',root),JSON.stringify(bundle));cached=bundle;return bundle;})();
  try{return await pending;}finally{pending=null;}
 }
@@ -39,6 +40,14 @@ export function canalLimits(data,bbox,now=Date.now()){
   if(v===null||crit===null||lat===null||lng===null||!at||!(now-Date.parse(at)<=3*3600000))continue;
   if(!inBox({lat,lng},bbox,PAD))continue;
   out.push({id:s.id,name:s.canal_name?.th||'',lat,lng,at,levelM:v,warningM:warn,criticalM:crit,bankM:bank});}
+ return out;}
+// Rivers/canals outside the BMA network (ThaiWater waterlevel_load: storage_percent = level as % of bank height),
+// last 3 h. Used for provinces without BMA canal data: a nearly full waterway means the land around it drains poorly.
+export function waterwayLimits(data,bbox,now=Date.now()){
+ const out=[];
+ for(const r of data?.waterlevel_data?.data||[]){const st=r.station||{},lat=wlNum(st.tele_station_lat),lng=wlNum(st.tele_station_long),pct=wlNum(r.storage_percent),at=time(r.waterlevel_datetime);
+  if(lat===null||lng===null||pct===null||!at||!(now-Date.parse(at)<=3*3600000)||!inBox({lat,lng},bbox,PAD))continue;
+  out.push({id:st.id,code:st.tele_station_oldcode||'',name:st.tele_station_name?.th||'',lat,lng,at,fullPct:pct});}
  return out;}
 // Water-level gauges along modelled rivers (ThaiWater waterlevel_load: level m MSL, bank levels, discharge) with their
 // hourly history (waterlevel_graph). Python keeps only those next to the river channel.

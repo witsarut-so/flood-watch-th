@@ -19,6 +19,9 @@ export const FEEDS=[
  {name:'ไทยรัฐ',url:'https://www.thairath.co.th/rss/news'},{name:'เดลินิวส์',url:'https://www.dailynews.co.th/feed/'},
  {name:'Bangkok Post',url:'https://www.bangkokpost.com/rss/data/topstories.xml'},{name:'Bangkok Post',url:'https://www.bangkokpost.com/rss/data/thailand.xml'},
  ...['น้ำท่วม','น้ำป่า','อุทกภัย','น้ำท่วมขัง','ระบายน้ำ เขื่อน','ดินโคลนถล่ม'].map(t=>({name:'Google News: '+t,url:GNEWS(t),google:true})),
+ // Generic words surface the big stories only; ask per province/district of the model area too (e.g. Bang Bua Thong
+ // had no story matching the generic queries while Mueang Nonthaburi/Pak Kret dominated).
+ ...['กรุงเทพ','นนทบุรี','ปทุมธานี','อยุธยา','สมุทรปราการ','นครปฐม','นครนายก','สระบุรี','ชลบุรี','พัทยา','กาญจนบุรี','บางบัวทอง','บางใหญ่','บางกรวย','ไทรน้อย','ปากเกร็ด','ลำลูกกา','คลองหลวง','ธัญบุรี','รังสิต','บางพลี','พระประแดง','บางปะอิน','พุทธมณฑล','ศาลายา'].map(p=>({name:'Google News: น้ำท่วม '+p,url:GNEWS('น้ำท่วม '+p),google:true})),
  {name:'Google News: Thailand flood',url:'https://news.google.com/rss/search?q=Thailand+flood+when:3d&hl=en-TH&gl=TH&ceid=TH:en',google:true},
 ];
 const HOURS=72,TRAFFY_HOURS=24,ARTICLE_LIMIT=40;
