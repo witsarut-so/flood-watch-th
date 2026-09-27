@@ -29,17 +29,18 @@ class SolverTests(unittest.TestCase):
   self.assertLess(float(np.max(np.abs(a-b))),.001)
  def test_missing_history_rejected(self):
   with self.assertRaises(ValueError):select_history({'rainHistory':[]})
- def test_station_with_gap_is_dropped_not_zero_filled(self):
+ def test_station_with_gap_is_kept_and_gap_left_missing(self):
   hours=lambda skip=():[{'observedAt':f'2026-09-26T{h:02d}:00+07:00','mm':1.} for h in range(0,13) if h not in skip]
   st=lambda i,skip=():{'id':i,'lat':13.9,'lng':100.4,'samples':hours(skip)}
   bundle={'fetchedAt':'2026-09-26T05:20:00Z','rainHistory':[st(5),st(26,(9,)),st(24)]}
   stations,series,times=select_history(bundle)
-  self.assertEqual([s['id'] for s in stations],[5,24])
+  self.assertEqual([s['id'] for s in stations],[5,26,24])
   self.assertEqual(len(times),13)
-  self.assertTrue(all(t in s for s in series for t in times))
+  gap=[t for t in times if t not in series[1]]
+  self.assertEqual([t.hour for t in gap],[9])  # missing hour stays missing (interpolated later), not 0
  def test_short_runs_everywhere_rejected(self):
   st=lambda i:{'id':i,'lat':13.9,'lng':100.4,'samples':[{'observedAt':f'2026-09-26T{h:02d}:00+07:00','mm':1.} for h in (8,10,11,12)]}
-  with self.assertRaises(ValueError):select_history({'fetchedAt':'2026-09-26T05:20:00Z','rainHistory':[st(1),st(2)]})
+  with self.assertRaises(ValueError):select_history({'fetchedAt':'2026-09-26T05:20:00Z','rainHistory':[st(1),st(2)]})  # 09:00 has no station -> only 3 h
 class OpenBoundaryTests(unittest.TestCase):
  def test_water_leaves_downhill_edge_with_mass_balance(self):
   z=np.tile(np.linspace(1,0,10),(6,1));h=np.full((6,10),.05)
@@ -72,5 +73,5 @@ class ValidationTests(unittest.TestCase):
  def test_window_up_to_24h(self):
   st=lambda i:{'id':i,'lat':13.9,'lng':100.4,'samples':[{'observedAt':(f'2026-09-25T{h:02d}:00+07:00' if h<24 else f'2026-09-26T{h-24:02d}:00+07:00'),'mm':1.} for h in range(0,37)]}
   _,_,times=select_history({'fetchedAt':'2026-09-26T05:20:00Z','rainHistory':[st(1),st(2)]})
-  self.assertEqual(len(times),24)
+  self.assertEqual(len(times),36)
 if __name__=='__main__':unittest.main()

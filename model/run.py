@@ -14,13 +14,15 @@ import rasterio
 from rasterio.warp import transform
 from solver import simulate
 ROOT=Path(__file__).resolve().parents[1]
-THRESHOLD_M=.02;DRAINAGE=[0.,3.,8.];INFILTRATION=2.;MAX_HOURS=24
+THRESHOLD_M=.02;DRAINAGE=[0.,3.,8.];INFILTRATION=2.;MAX_HOURS=36  # rain_24h_graph returns ~37 h
 
-def select_history(bundle):
-    """Choose the window (6-24 h, ending within 3 h of fetch) and the stations complete over it that
-    maximise station-hours. Stations with a gap in the window are left out, never zero-filled."""
+def select_history(bundle,min_stations=2):
+    """Choose the longest recent window (6..MAX_HOURS h, ending at the latest hour within 3 h of fetch) in which
+    every hour has rain from at least `min_stations` stations. A station missing some hours is kept: those hours
+    are interpolated from the stations that did report (never zero-filled). Stations with no value in the
+    window are left out. Returns (stations, series, times) with series[i][t] possibly missing."""
     histories=bundle.get('rainHistory',[])
-    if len(histories)<2:raise ValueError('ต้องมีประวัติฝนที่ใช้ได้อย่างน้อย 2 สถานี')
+    if len(histories)<min_stations:raise ValueError('ต้องมีประวัติฝนที่ใช้ได้อย่างน้อย 2 สถานี')
     now=datetime.fromisoformat(bundle['fetchedAt'].replace('Z','+00:00'))
     series=[]
     for station in histories:
@@ -30,17 +32,13 @@ def select_history(bundle):
                 t=datetime.fromisoformat(s['observedAt'])
                 if t<=now:values[t]=s['mm']
         series.append(values)
-    ends={t for s in series for t in s if (now-t).total_seconds()<=10800}
-    best=None
-    for end in ends:
-        for hours in range(6,MAX_HOURS+1):
-            times=[end-timedelta(hours=k) for k in range(hours-1,-1,-1)]
-            members=[i for i,s in enumerate(series) if all(t in s for t in times)]
-            if len(members)<2:break
-            score=(len(members)*hours,hours,end)
-            if best is None or score>best[0]:best=(score,members,times)
-    if best is None:raise ValueError('ต้องมีฝนต่อเนื่องอย่างน้อย 6 ชั่วโมงจากอย่างน้อย 2 สถานี (ล่าสุดไม่เกิน 3 ชั่วโมง) ไม่มีการแทนข้อมูลหายด้วยศูนย์')
-    _,members,times=best
+    reporting=lambda t:sum(1 for s in series if t in s)
+    ends=sorted({t for s in series for t in s if (now-t).total_seconds()<=10800 and reporting(t)>=min_stations},reverse=True)
+    if not ends:raise ValueError('ไม่มีฝนล่าสุด (ไม่เกิน 3 ชั่วโมง) จากอย่างน้อย 2 สถานี')
+    end=ends[0];times=[end]
+    while len(times)<MAX_HOURS and reporting(times[0]-timedelta(hours=1))>=min_stations:times.insert(0,times[0]-timedelta(hours=1))
+    if len(times)<6:raise ValueError('ต้องมีฝนต่อเนื่องอย่างน้อย 6 ชั่วโมง (อย่างน้อย 2 สถานีต่อชั่วโมง) ไม่มีการแทนข้อมูลหายด้วยศูนย์')
+    members=[i for i,s in enumerate(series) if any(t in s for t in times)]
     return [histories[i] for i in members],[series[i] for i in members],times
 
 def validate(obs,depth,mask,affine,crs,times):
@@ -84,13 +82,15 @@ def run_task(task):
     with rasterio.open(base/'mask.tif') as src:mask=src.read(1)
     meta=json.loads((base/'metadata.json').read_text());dx=meta['cellSizeM'];dt=15 if dx<=100 else 30  # tested against 5 s on real terrain: p99 depth diff 0.05 cm, 99.98% same wet cells
     yy,xx=np.indices(z.shape);gx=affine.c+(xx+.5)*affine.a;gy=affine.f+(yy+.5)*affine.e
-    weights=np.array([1/np.maximum((gx-x)**2+(gy-y)**2,1000**2) for x,y in stations_xy],dtype='float32');weights/=weights.sum(axis=0)
+    weights=np.array([1/np.maximum((gx-x)**2+(gy-y)**2,1000**2) for x,y in stations_xy],dtype='float32')
     del yy,xx,gx,gy
     names={p['code']:p['name'] for p in meta['provinces']};inside=mask>0
     h=np.zeros_like(z);balance={'initialM3':0.,'rainM3':0.,'infiltrationM3':0.,'drainageM3':0.,'boundaryOutflowM3':0.}
     depth=np.zeros((len(times),)+z.shape,dtype='uint8');frames=[];rain_means=[]
     for i,hour_values in enumerate(values):
-        rain=np.tensordot(np.asarray(hour_values),weights,axes=1);rain_means.append(float(rain[inside].mean()))
+        # inverse-distance weights renormalised over the stations that reported this hour (None = missing)
+        avail=[j for j,v in enumerate(hour_values) if v is not None]
+        rain=np.tensordot(np.asarray([hour_values[j] for j in avail],dtype='float32'),weights[avail],axes=1)/weights[avail].sum(axis=0);rain_means.append(float(rain[inside].mean()))
         out=simulate(z,rain,dx=dx,dt=dt,infiltration_mm_h=INFILTRATION,drainage_mm_h=drain,initial=h,capture=(3600,),open_boundary=True);h=out['depth']
         for key in ['rainM3','infiltrationM3','drainageM3','boundaryOutflowM3']:balance[key]+=out['balance'][key]
         shown=np.where(inside,h,0);depth[i]=np.minimum(np.round(shown*100),255).astype('uint8')
@@ -120,11 +120,12 @@ def main(input_path,out_dir):
         except ValueError as e:domains.append({**info,'skipped':str(e)});continue
         kept={s['id'] for s in stations};w,s,e,n=meta['bbox']
         xs,ys=transform('EPSG:4326',meta['horizontalCrs'],[st['lng'] for st in stations],[st['lat'] for st in stations])
-        values=[[sr[t] for sr in series] for t in times];iso=[t.isoformat() for t in times]
+        values=[[sr.get(t) for sr in series] for t in times];iso=[t.isoformat() for t in times]
+        coverage=[sum(v is not None for v in row) for row in values]
         obs=[o for o in obs_all if s<=o['lat']<=n and w<=o['lng']<=e]
         domains.append({**info,'startAt':(times[0]-timedelta(hours=1)).isoformat(),'endAt':iso[-1],'times':iso,
             'rainStations':[{k:st[k] for k in ['id','name','lat','lng','source']} for st in stations],
-            'rainStationsExcluded':[{'id':h['id'],'name':h['name'],'reason':'hourly gap within the selected window'} for h in domain_bundle(bundle,meta)['rainHistory'] if h['id'] not in kept],
+            'rainStationsExcluded':[{'id':h['id'],'name':h['name'],'reason':'no value within the selected window'} for h in domain_bundle(bundle,meta)['rainHistory'] if h['id'] not in kept],'stationsPerHour':coverage,
             'observationsUsed':{k:sum(1 for o in obs if o['kind']==k) for k in {o['kind'] for o in obs}},'scenarios':[None]*len(DRAINAGE)})
         for k,drain in enumerate(DRAINAGE):tasks.append([dom['id'],k,drain,list(zip(xs,ys)),values,iso,obs,str(out_dir)])
     # a few processes, each running the numba kernel on the remaining cores (no oversubscription)
@@ -140,7 +141,7 @@ def main(input_path,out_dir):
     result={'kind':'experimental-rainfall-replay','engine':'storage-cell-routing-v2 (open edges; not SFINCS/SWMM)','operational':False,'issuedAt':datetime.now(timezone.utc).isoformat(),
         'inputFetchedAt':bundle['fetchedAt'],'inputSha256':bundle.get('rawSha256'),'thresholdM':THRESHOLD_M,'drainageScenariosMmH':DRAINAGE,
         'depthFiles':'<domain>-s<scenario>-f<frame>.bin.gz: gzip uint8 cm, row-major domain grid, 255 = >=255 cm',
-        'rainTimeAssumption':'Provider hourly totals interpreted as the hour ending at timestamp in Asia/Bangkok.','rainInterpolation':'inverse distance squared between stations (min 1 km); not radar',
+        'rainTimeAssumption':'Provider hourly totals interpreted as the hour ending at timestamp in Asia/Bangkok.','rainInterpolation':'inverse distance squared between the stations reporting each hour (min 1 km); missing station-hours are interpolated from the others, never zero-filled; not radar',
         'timeStepS':{'100m':15,'250m':30},'initialCondition':'zero additional surface storage','boundaryCondition':'open domain edges (free outflow); no river/sea stage forcing',
         'notUsed':['river/canal stages','dam releases and gate/pump operations','photos and reports (validation only)','satellite water'],
         'validationNote':'Citizen reports only say where water was seen; road sensors reading 0 are the only dry checks. Hit rate above baseRate means water is placed where people reported it better than chance.',

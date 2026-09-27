@@ -30,6 +30,10 @@ function describeModel(){
  for(const [p,km2,d] of rows.sort((a,b)=>b[1]-a[1])){const tr=document.createElement('tr');for(const c of [p,km2.toLocaleString('th-TH',{maximumFractionDigits:1}),`${d.cellSizeM} ม.`,thaiTime(d.times[frameIndex(d)])]){const td=document.createElement('td');td.textContent=c;tr.append(td);}tb.append(tr);}
  const v=liveDomains().map(d=>[d,d.scenarios[k].validation]).filter(([,x])=>x?.positives),pct=x=>x==null?'–':Math.round(x*100)+'%';
  $('model-validation').textContent=v.length?'ความน่าเชื่อถือ (เทียบรายงานประชาชน/เซนเซอร์ในช่วงเวลาเดียวกัน): '+v.map(([d,x])=>`${d.name}: ${x.positives.toLocaleString('th-TH')} จุด แบบจำลองมีน้ำในระยะ ~1 เซลล์ ${pct(x.hitRate)} (สุ่ม ${pct(x.baseRate)})${x.negatives?` • เซนเซอร์แห้งแต่แบบจำลองเปียก ${pct(x.falseAlarmRate)}`:''}${d.bestScenario!=null?` • สมมติฐานที่ตรงที่สุด ${d.bestScenario} มม./ชม.`:''}`).join(' | '):'ยังไม่มีรายงานประชาชนหรือเซนเซอร์ในพื้นที่/ช่วงเวลาจำลองสำหรับตรวจสอบ';
+ // Say which rain the run saw; a dry window gives little water even while earlier flooding persists on the ground.
+ const refRain=ref.scenarios[k].rainMeanTotalMm;
+ $('model-window').textContent=`ใช้ฝน ${thaiTime(ref.startAt)} – ${thaiTime(ref.endAt)} (${ref.times.length} ชม.) เฉลี่ย ${refRain.toFixed(0)} มม.`+(refRain<20?' • ฝนช่วงนี้น้อย แบบจำลองจึงมีน้ำขังน้อย ไม่ได้แปลว่าน้ำที่ท่วมอยู่แล้วลดลง ดูข้อมูลจริงประกอบ':'');
+ $('model-window').classList.toggle('warn',refRain<20);
  const skipped=modelRun.domains.filter(d=>d.skipped);
  $('model-balance').textContent=liveDomains().map(d=>`${d.name}: ฝนเฉลี่ยสะสม ${d.scenarios[k].rainMeanTotalMm.toFixed(0)} มม. ใน ${d.times.length} ชม. จาก ${d.rainStations.length} สถานี • น้ำไหลออกขอบพื้นที่ ${(d.scenarios[k].balance.boundaryOutflowM3/1e6).toFixed(1)} ล้าน ลบ.ม. • สมดุลน้ำคลาดเคลื่อน ${(d.scenarios[k].balance.relativeResidual*100).toExponential(0)}%`).join(' | ')+(skipped.length?' | ไม่ได้คำนวณ: '+skipped.map(d=>`${d.name} (${d.skipped})`).join(', '):'');
 }
