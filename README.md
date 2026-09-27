@@ -57,3 +57,7 @@ Vercel ผูกกับ repo นี้ (Git integration) และ build ด�
 
 ## Attribution
 แผนที่ ถนน ทางน้ำ ขอบเขต: © OpenStreetMap contributors (ODbL) • ภูมิประเทศ: Copernicus DEM GLO-30 © DLR e.V. 2010–2014 และ © Airbus Defence and Space GmbH 2014–2018, ESA Copernicus • ข้อมูลน้ำ: ThaiWater • รายงานประชาชน: Traffy Fondue / กรุงเทพมหานคร • โซเชียล: Bluesky
+
+## ภาพดาวเทียม (GISTDA)
+
+[satellite.mjs](satellite.mjs) ดึงพื้นที่น้ำท่วมรอบ 3 วันจาก GISTDA Disaster Platform ในกรอบของทุกพื้นที่แบบจำลอง ทุกไม่เกิน 3 ชม. (ต้องมี API key ฟรีจาก disaster.gistda.or.th ตั้งเป็น secret `GISTDA_API_KEY`) → `public/live/satellite.json` (ชั้นแผนที่) และสรุปรายอำเภอใน evidence.json • ใช้ตรวจเทียบแบบจำลองเป็นหมวดแยก (ไม่รวมในคะแนนเลือกสมมติฐาน เพราะส่วนใหญ่เป็นน้ำหลากจากแม่น้ำบนพื้นที่เกษตรก่อนช่วงฝนที่จำลอง)

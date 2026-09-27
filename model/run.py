@@ -62,12 +62,15 @@ def validate(obs,depth,mask,affine,crs,times):
         c=int((x-affine.c)//affine.a);r=int((y-affine.f)//affine.e)
         if not(0<=r<mask.shape[0] and 0<=c<mask.shape[1]) or not inside[r,c]:continue
         if o['wet']:
+            k=res['kinds'].setdefault(o['kind'],[0,0,[]]);k[0]+=1;k[1]+=int(near[f,r,c]);k[2].append(base_by_frame[f])
+            # satellite areas (mostly river flooding on farmland, often from before the rain window) are reported
+            # on their own and kept out of the score, which is about rain-driven street/urban flooding
+            if o['kind']=='satellite':continue
             res['positives']+=1;res['hits']+=int(near[f,r,c]);res['baseRate'].append(base_by_frame[f])
-            k=res['kinds'].setdefault(o['kind'],[0,0]);k[0]+=1;k[1]+=int(near[f,r,c])
         else:res['negatives']+=1;res['falseAlarms']+=int(wet[f,r,c])
     base=float(np.mean(res['baseRate'])) if res['baseRate'] else None
     return {'n':res['positives']+res['negatives'],'positives':res['positives'],'hits':res['hits'],'hitRate':res['hits']/res['positives'] if res['positives'] else None,'baseRate':base,
-        'negatives':res['negatives'],'falseAlarms':res['falseAlarms'],'falseAlarmRate':res['falseAlarms']/res['negatives'] if res['negatives'] else None,'byKind':{k:{'n':v[0],'hits':v[1]} for k,v in res['kinds'].items()}}
+        'negatives':res['negatives'],'falseAlarms':res['falseAlarms'],'falseAlarmRate':res['falseAlarms']/res['negatives'] if res['negatives'] else None,'byKind':{k:{'n':v[0],'hits':v[1],'hitRate':v[1]/v[0],'baseRate':float(np.mean(v[2]))} for k,v in res['kinds'].items()}}
 
 def domain_bundle(bundle,meta,pad=.2):
     w,s,e,n=meta['bbox']
@@ -92,34 +95,55 @@ def dam_series(points,times,lag_h):
         out.append(float(np.median(recent)) if recent else float(before[-1]) if before else float(act[0][1]))
     return out
 
-def run_task(task):
-    """One (domain, scenario): simulate hour by hour, write frames, return stats and validation."""
-    d,k,drain,stations_xy,values,times,obs,out_dir,river,threads=task
+def set_threads(threads):
     try:
         import numba;numba.set_num_threads(threads)
     except (ImportError,ValueError):pass
-    base=ROOT/'data/domains'/d
-    with rasterio.open(base/'dsm.tif') as src:z=src.read(1).astype(float);affine=src.transform;crs=src.crs
+
+def setup(d,drain,river):
+    """Grids and per-cell terms of one (domain, drainage scenario), with the river channel carved in."""
+    base=ROOT/'data/domains'/d;s={}
+    with rasterio.open(base/'dsm.tif') as src:z=src.read(1).astype(float);s['affine']=src.transform;s['crs']=src.crs
     with rasterio.open(base/'mask.tif') as src:mask=src.read(1)
-    meta=json.loads((base/'metadata.json').read_text());dx=meta['cellSizeM'];dt=15 if dx<=100 else 30  # tested against 5 s on real terrain: p99 depth diff 0.05 cm, 99.98% same wet cells
-    yy,xx=np.indices(z.shape);gx=affine.c+(xx+.5)*affine.a;gy=affine.f+(yy+.5)*affine.e
-    weights=np.array([1/np.maximum((gx-x)**2+(gy-y)**2,1000**2) for x,y in stations_xy],dtype='float32')
-    del yy,xx,gx,gy
-    names={p['code']:p['name'] for p in meta['provinces']};inside=mask>0
+    meta=json.loads((base/'metadata.json').read_text());dx=meta['cellSizeM']
+    dt=15 if dx<=100 else 30  # longest step; the solver shortens it where water is deep (0.7 dx / sqrt(g h))
+    names={p['code']:p['name'] for p in meta['provinces']}
     # drainage per cell: scenario value, with the Bangkok pumping capacity in the middle scenario
     drn=np.full(z.shape,float(drain));bkk=[c for c,nm in names.items() if nm=='กรุงเทพฯ']
     if drain==3. and bkk:cells=(mask==bkk[0]);drn[cells]=BMA_PUMPING_M3S/(cells.sum()*dx*dx)*3.6e6
-    inf=np.full(z.shape,INFILTRATION);h=np.zeros_like(z);inflow=0.;sink=None;wall=None;flux=None;channel=np.zeros(z.shape,dtype=bool);qs=None
+    inf=np.full(z.shape,INFILTRATION);h=np.zeros_like(z);channel=np.zeros(z.shape,dtype=bool)
+    s.update(z=z,mask=mask,meta=meta,dx=dx,dt=dt,names=names,drn=drn,inf=inf,h=h,channel=channel,sink=None,wall=None,per_cell=None)
     if river:
         with rasterio.open(base/'river.tif') as src:rv=src.read(1)
         channel=rv>0;z,ref=rv_mod.channel_bed(z,rv,river['channelDepthM']);h[channel]=(ref-z)[channel]  # smoothed bed, filled to the dry-season (DSM) level
-        checks=rv_mod.near_channel(river.get('gauges',[]),channel,affine,crs)
         drn[channel]=0;inf[channel]=0
         # sea: low cells outside the provinces near the southern edge are held at sea level (dry sink)
         R=z.shape[0];sink=np.zeros(z.shape,dtype=np.uint8);sink[int(R*.9):,:]=((z[int(R*.9):,:]<=.5)&(mask[int(R*.9):,:]==0)&~channel[int(R*.9):,:])
-        qs=river['q'];inlet,wall=rv_mod.inlet(rv);h[wall]=0;per_cell=lambda q:np.where(inlet,q*3.6e6/(inlet.sum()*dx*dx),0.)
+        inlet,wall=rv_mod.inlet(rv);h[wall]=0
+        s.update(z=z,channel=channel,sink=sink,wall=wall,per_cell=lambda q:np.where(inlet,q*3.6e6/(inlet.sum()*dx*dx),0.))
+    return s
+
+SPIN_DRAIN=3.  # the shared river warm-up uses the middle scenario's drainage
+def spin_path(out_dir,d):return Path(out_dir)/f'_spinup-{d}.npz'
+
+def spinup_task(task):
+    """River-only warm-up of one domain, shared by all its drainage scenarios (same river, no rain)."""
+    d,river,out_dir,threads=task;set_threads(threads);s=setup(d,SPIN_DRAIN,river)
+    out=simulate(s['z'],0,duration_s=SPINUP_H*3600,dx=s['dx'],dt=s['dt'],infiltration_mm_h=s['inf'],drainage_mm_h=s['drn'],initial=s['h'],capture=(),open_boundary=True,inflow_mm_h=s['per_cell'](river['q0']),sink=s['sink'],wall=s['wall'])
+    np.savez(spin_path(out_dir,d),h=out['depth'],qx=out['flux'][0],qy=out['flux'][1]);return d
+
+def run_task(task):
+    """One (domain, scenario): simulate hour by hour, write frames, return stats and validation."""
+    d,k,drain,stations_xy,values,times,obs,out_dir,river,threads=task;set_threads(threads)
+    s=setup(d,drain,river);z,mask,meta,dx,dt,names,drn,inf,h,channel,sink,wall,per_cell,affine,crs=(s[k_] for k_ in ('z','mask','meta','dx','dt','names','drn','inf','h','channel','sink','wall','per_cell','affine','crs'))
+    yy,xx=np.indices(z.shape);gx=affine.c+(xx+.5)*affine.a;gy=affine.f+(yy+.5)*affine.e
+    weights=np.array([1/np.maximum((gx-x)**2+(gy-y)**2,1000**2) for x,y in stations_xy],dtype='float32')
+    del yy,xx,gx,gy
+    inside=mask>0;inflow=0.;flux=None;qs=None
+    if river:
+        checks=rv_mod.near_channel(river.get('gauges',[]),channel,affine,crs);qs=river['q']
         if qs:
-            out=simulate(z,0,duration_s=SPINUP_H*3600,dx=dx,dt=dt,infiltration_mm_h=inf,drainage_mm_h=drn,initial=h,capture=(SPINUP_H*3600,),open_boundary=True,inflow_mm_h=per_cell(river['q0']),sink=sink,wall=wall);h=out['depth'];flux=out['flux']
+            sp=np.load(spin_path(out_dir,d));h=sp['h'].copy();flux=(sp['qx'].copy(),sp['qy'].copy())
     sim_fb={g['code']:[] for g in (checks if river else [])}
     balance={'initialM3':float(h.sum()*dx*dx),'rainM3':0.,'inflowM3':0.,'infiltrationM3':0.,'drainageM3':0.,'boundaryOutflowM3':0.,'sinkM3':0.}
     depth=np.zeros((len(times),)+z.shape,dtype='uint8');frames=[];rain_means=[]
@@ -195,8 +219,16 @@ def main(input_path,out_dir):
     # a few processes, each running the numba kernel on the remaining cores (no oversubscription)
     cpus=os.cpu_count() or 2;workers=max(1,min(len(tasks),cpus//2,3));threads=max(1,cpus//workers)
     tasks=[tuple(t+[threads]) for t in tasks]
+    # river domains: one shared warm-up first (runs while the other domains' scenarios are computed)
+    spins={t[0]:t[8] for t in tasks if t[8] and t[8].get('q')}
     with ProcessPoolExecutor(max_workers=workers) as pool:
-        for d,k,sc in pool.map(run_task,tasks):next(x for x in domains if x['id']==d)['scenarios'][k]=sc
+        warm=[pool.submit(spinup_task,(d,rv,str(out_dir),threads)) for d,rv in spins.items()]
+        futs=[pool.submit(run_task,t) for t in tasks if t[0] not in spins]
+        for f in warm:f.result()
+        futs+=[pool.submit(run_task,t) for t in tasks if t[0] in spins]
+        for f in futs:
+            d,k,sc=f.result();next(x for x in domains if x['id']==d)['scenarios'][k]=sc
+    for d in spins:spin_path(out_dir,d).unlink(missing_ok=True)
     for dom in domains:
         if dom.get('skipped'):continue
         for sc in dom['scenarios']:sc['validation']['skill']=skill(sc['validation'])
@@ -206,7 +238,7 @@ def main(input_path,out_dir):
         'inputFetchedAt':bundle['fetchedAt'],'inputSha256':bundle.get('rawSha256'),'thresholdM':THRESHOLD_M,'drainageScenariosMmH':DRAINAGE,
         'depthFiles':'<domain>-s<scenario>-f<frame>.bin.gz: gzip uint8 cm, row-major domain grid, 255 = >=255 cm',
         'rainTimeAssumption':'Provider hourly totals interpreted as the hour ending at timestamp in Asia/Bangkok.','rainInterpolation':'inverse distance squared between the stations reporting each hour (min 1 km); missing station-hours are interpolated from the others, never zero-filled; not radar',
-        'timeStepS':{'100m':15,'250m':30},'initialCondition':'zero additional surface storage','boundaryCondition':'open domain edges (free outflow); central domain: Chao Phraya channel fed by news-reported dam release, sea cells held dry',
+        'timeStepS':{'100m':15,'250m':30,'note':'longest step; shortened to 0.7 dx/sqrt(g h_max) in deep water'},'initialCondition':'zero additional surface storage; river channel after a shared river-only warm-up (middle drainage scenario)','boundaryCondition':'open domain edges (free outflow); central domain: Chao Phraya channel fed by the discharge measured at C.7A (news-reported dam release if missing), sea cells held dry',
         'bangkokPumping':{'m3s':BMA_PUMPING_M3S,'source':'BMA pumping stations to the Chao Phraya, both banks (ThaiPublica, June 2025)','usedIn':'middle drainage scenario, Bangkok cells'},
         'notUsed':['river/canal stage observations','individual gate/pump operations','photos and reports (validation only)','satellite water'],
         'validationNote':'Citizen reports only say where water was seen; road sensors reading 0 are the only dry checks. Hit rate above baseRate means water is placed where people reported it better than chance.',

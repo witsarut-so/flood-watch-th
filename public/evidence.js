@@ -37,7 +37,7 @@ function paintEvidence(){
  const counts={};
  for(const [k,layer] of Object.entries(evidenceLayers)){layer.clearLayers();const on=$('f-'+k)?.checked;if(on)layer.addTo(map);else map.removeLayer(layer);}
  for(const i of evidenceData.items){
-  const k=kindOf(i);if(!visible(i,k))continue;counts[k]=(counts[k]||0)+1;
+  const k=kindOf(i);if(!visible(i,k)||(k==='bmareport'&&i.expired))continue;counts[k]=(counts[k]||0)+1;
   // mentioned places: drawn lines/points for every visible item that resolved one
   if($('f-mentions').checked&&$('f-'+k)?.checked)for(const g of i.geo||[]){if(!g.drawn)continue;
    if(g.lines.length){L.polyline(g.lines,{renderer:mentionRenderer,color:'#fff',weight:8,opacity:.8,interactive:false}).addTo(evidenceLayers.mentions);L.polyline(g.lines,{renderer:mentionRenderer,color:MENTION,weight:4,opacity:.95,interactive:false}).addTo(evidenceLayers.mentions);}
@@ -45,7 +45,6 @@ function paintEvidence(){
   if(!$('f-'+k)?.checked)continue;
   const style={renderer:evidenceRenderer,pane:'evidence',color:'#fff',weight:1.2,fillColor:evidenceKinds[k],fillOpacity:.9};
   if(k==='news'||(k==='social'&&!i.precision)){for(const p of (i.places||[]).filter(p=>p.precision!=='province').slice(0,5))(k==='social'?L.marker([p.lat,p.lng],{pane:'evidence',icon:icon('social','💬')}):L.circleMarker([p.lat,p.lng],{...style,radius:p.precision==='province'?7:5.5,fillOpacity:.6})).bindPopup(()=>popup(i),{maxWidth:300}).addTo(evidenceLayers[k]);continue;}
-  if(k==='bmareport'&&i.expired)continue;  // older than 12 h: superseded by the live sensors
   if(k==='bmaroad'||k==='bmareport'){const col=BMA_COLOR[i.level]||'#e03131',dash=k==='bmareport'?'7 5':null,layer=evidenceLayers[k];
    // district-level approximations (report named a road but no segment) are faint and off by default
    const approx=k==='bmareport'&&i.approximate;
@@ -87,7 +86,7 @@ function paintRain(){
 }
 
 function renderSituation(){
- const d=evidenceData;
+ const d=evidenceData;if(typeof renderSatelliteSummary==="function")renderSatelliteSummary(d);
  $('ev-status').textContent=`อัปเดต ${thaiTime(d.fetchedAt)} (${ago(d.fetchedAt)}) • ข่าว/โซเชียลย้อนหลัง ${d.windowHours.news} ชม. • รายงานประชาชน ${d.windowHours.citizen} ชม.`+(d.errors.length?` • บางแหล่งดึงไม่สำเร็จ: ${[...new Set(d.errors.map(e=>e.source.split(':')[0]))].join(', ')}`:'');
  const br=d.items.filter(i=>i.subkind==='bma-road'),rr=d.items.filter(i=>i.subkind==='bma-report'&&!i.expired),rx=d.items.filter(i=>i.subkind==='bma-report'&&i.expired).length;
  if(br.length||rr.length)$('ev-status').textContent+=` • กทม.: จุดวัดพบน้ำ ${br.length} ถนน, รายงานเขต ${rr.length} จุด (จุดวัด ${br[0]?thaiTime(br[0].at):'–'}${rr[0]?`, รายงานเขต ${thaiTime(rr[0].at)}`:''})${rx?` • ไม่แสดงรายงานเขตเก่าเกิน 12 ชม. ${rx} จุด`:''}`;else if(d.sources?.bmaAlert&&!d.sources.bmaAlert.ok)$('ev-status').textContent+=' • ดึงข้อมูลเตือนภัย กทม. ไม่สำเร็จ';

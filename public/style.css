@@ -77,3 +77,4 @@ footer{max-width:1600px;margin:0 auto;padding:0 max(16px,3%) 28px;font-size:11px
 .gauge-table th:first-child,.gauge-table td:first-child{text-align:left;white-space:normal}
 .gauge-table td.ok{color:#2b8a3e}.gauge-table td.warn{color:#e67700}.gauge-table td.bad{color:#c92a2a}
 #river-gauges{overflow-x:auto}
+.sat-summary{margin-top:14px}.sat-summary h3 small{font-weight:400;color:#6b7f79}

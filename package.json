@@ -5,7 +5,7 @@
  "type": "module",
  "scripts": {
   "start": "node server.mjs",
-  "check": "node --check server.mjs && node --check jobs.mjs && node --check evidence.mjs && node --check evidence-text.mjs && node --check named-match.mjs && node --check model-inputs.mjs && node --check live-water.mjs && node --check public/app.js && node --check public/basemap.js && node --check public/model.js && node --check public/evidence.js",
+  "check": "node --check server.mjs && node --check jobs.mjs && node --check evidence.mjs && node --check evidence-text.mjs && node --check named-match.mjs && node --check model-inputs.mjs && node --check satellite.mjs && node --check live-water.mjs && node --check public/app.js && node --check public/basemap.js && node --check public/model.js && node --check public/evidence.js && node --check public/satellite.js",
   "test": "node --test tests/*.test.mjs && .venv/bin/python -m unittest discover -s tests",
   "evidence": "node jobs.mjs evidence",
   "model": "node jobs.mjs model --force",

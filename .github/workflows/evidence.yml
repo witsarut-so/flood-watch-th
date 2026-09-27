@@ -24,5 +24,6 @@ jobs:
       - name: News outlets' social posts (flood-social-feed)
         run: gh release download live -p social-feed.json.gz -D data/evidence --clobber || echo "no social feed yet"
       - run: node jobs.mjs evidence
+        env: {GISTDA_API_KEY: '${{ secrets.GISTDA_API_KEY }}'}
       - run: scripts/publish-live.sh
         env: {VERCEL_DEPLOY_HOOK: '${{ secrets.VERCEL_DEPLOY_HOOK }}'}

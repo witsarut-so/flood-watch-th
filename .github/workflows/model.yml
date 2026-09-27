@@ -1,9 +1,11 @@
 # Every 2 hours: run the flood model for all domains (validated against the latest evidence), publish, rebuild.
+# The long computation runs outside the live-data lock (group: model); only the short publish job holds it and
+# merges the new run into the newest live data, so evidence updates are never blocked or overwritten.
 name: model
 on:
   schedule: [{cron: '10 */2 * * *'}]
   workflow_dispatch:
-concurrency: {group: live-data, cancel-in-progress: false}
+concurrency: {group: model, cancel-in-progress: false}
 permissions: {contents: write}
 jobs:
   run:
@@ -32,5 +34,26 @@ jobs:
       - uses: actions/cache/save@v4
         if: always()
         with: {path: numba-cache, key: 'numba-${{ hashFiles(''model/solver.py'') }}-${{ github.run_id }}'}
+      - name: Collect this run (newest run folder + latest.json)
+        run: |
+          id=$(node -e "console.log(JSON.parse(require('fs').readFileSync('public/live/model/latest.json')).runId)")
+          mkdir -p new-model && cp -R "public/live/model/$id" new-model/ && cp public/live/model/latest.json new-model/
+      - uses: actions/upload-artifact@v4
+        with: {name: model-run, path: new-model, retention-days: 1}
+  publish:
+    needs: run
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency: {group: live-data, cancel-in-progress: false}
+    env: {GH_TOKEN: '${{ github.token }}'}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 22}
+      - name: Newest live data (evidence may have been updated during the model run)
+        run: gh release download live -p live.tar.gz -O - | tar xz || echo "no live release yet"
+      - uses: actions/download-artifact@v4
+        with: {name: model-run, path: new-model}
+      - run: scripts/merge-model.sh new-model
       - run: scripts/publish-live.sh
         env: {VERCEL_DEPLOY_HOOK: '${{ secrets.VERCEL_DEPLOY_HOOK }}'}
