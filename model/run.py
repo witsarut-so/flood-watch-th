@@ -112,7 +112,7 @@ def setup(d,drain,river):
     drn=np.full(z.shape,float(drain));bkk=[c for c,nm in names.items() if nm=='กรุงเทพฯ']
     if drain==3. and bkk:cells=(mask==bkk[0]);drn[cells]=BMA_PUMPING_M3S/(cells.sum()*dx*dx)*3.6e6
     inf=np.full(z.shape,INFILTRATION);h=np.zeros_like(z);channel=np.zeros(z.shape,dtype=bool)
-    s.update(z=z,mask=mask,meta=meta,dx=dx,dt=dt,names=names,drn=drn,inf=inf,h=h,channel=channel,sink=None,wall=None,per_cell=None)
+    s.update(bkk=bkk[0] if bkk else None,z=z,mask=mask,meta=meta,dx=dx,dt=dt,names=names,drn=drn,inf=inf,h=h,channel=channel,sink=None,wall=None,per_cell=None)
     if river:
         with rasterio.open(base/'river.tif') as src:rv=src.read(1)
         channel=rv>0;z,ref=rv_mod.channel_bed(z,rv,river['channelDepthM']);h[channel]=(ref-z)[channel]  # smoothed bed, filled to the dry-season (DSM) level
@@ -165,7 +165,7 @@ def run_task(task):
     balance['relativeResidual']=abs(balance['residualM3'])/max(1,balance['initialM3']+balance['rainM3']+balance['inflowM3'])
     if balance['relativeResidual']>1e-8:raise ArithmeticError(f'Water balance failed for {d}')
     check=validate(obs,depth,mask,affine,crs,[datetime.fromisoformat(t) for t in times])
-    bkk_rate=float(drn[mask==bkk[0]].mean()) if (bkk and drain==3.) else None
+    bkk_rate=float(drn[mask==s['bkk']].mean()) if (s['bkk'] is not None and drain==3.) else None
     gauge_checks=None
     if river and checks:
         tt=[datetime.fromisoformat(t) for t in times];obs={g['code']:rv_mod.hourly(g['series'],tt,'wl') for g in checks};cmp=rv_mod.compare(obs,sim_fb)
