@@ -123,6 +123,9 @@ export function jsConst(src,name){
   out+=c;if(c==='['||c==='{')depth++;else if((c===']'||c==='}')&&--depth===0)break;}
  return JSON.parse(out.replace(/,\s*([}\]])/g,'$1'));
 }
+// The BMA page carries two times: sensor values ("ค่าเวลา 09:40 น. · อาทิตย์ 27 ก.ย. 2569") and the district report
+// file ("อัปเดต 17:43 น. 26 ก.ย. 2569", often from the day before). Sensors must not inherit the report's time.
+function sensorStamp(text){const m=text.match(/ค่าเวลา\s*(\d{1,2}):(\d{2})\s*น\.[^0-9]{0,80}?(\d{1,2})\s*([ก-๙.]+)\s*(\d{4})/);if(!m||!TH_MONTH[m[4]])return null;const y=+m[5]-543,pad=n=>String(n).padStart(2,'0');return new Date(`${y}-${pad(TH_MONTH[m[4]])}-${pad(m[3])}T${pad(m[1])}:${m[2]}:00+07:00`).toISOString();}
 function thaiStamp(text){const m=text.match(/อัปเดต\s*(\d{1,2}):(\d{2})\s*น\.\s*(\d{1,2})\s*([ก-๙.]+)\s*(\d{4})/);if(!m||!TH_MONTH[m[4]])return null;const y=+m[5]-543,pad=n=>String(n).padStart(2,'0');return new Date(`${y}-${pad(TH_MONTH[m[4]])}-${pad(m[3])}T${pad(m[1])}:${m[2]}:00+07:00`).toISOString();}
 // District-report geometry from the BMA page is often too broad: a report with no segment is drawn along the whole
 // road, even outside the reporting district (e.g. เพชรเกษม reported by หนองแขม drawn through บางแค). We clip:
@@ -159,8 +162,23 @@ async function bmaWithFallback(g,idx,errors){
  try{const items=await bmaFloodAlert(g,idx);if(items.length){await mkdir(new URL('./data/evidence/',import.meta.url),{recursive:true});await writeFile(BMA_CACHE,JSON.stringify({fetchedAt:new Date().toISOString(),items}));}return items;}
  catch(e){try{const last=JSON.parse(await readFile(BMA_CACHE));errors.push({source:'bmaAlert',error:`${e.message} (เว็บ กทม. เข้าได้จากเครือข่ายในไทยเท่านั้น) • ใช้ข้อมูลที่ดึงสำเร็จล่าสุดเมื่อ ${last.fetchedAt}`});return last.items.map(i=>({...i,stale:true,fetchedAt:last.fetchedAt}));}catch{throw e;}}
 }
+// District reports are a snapshot typed up by district staff (often hours old); road sensors are live.
+// A report older than REPORT_MAX_H is kept in the list but marked expired (not drawn, not used by the model), and
+// report lines are cut within DRY_CLIP_KM of any road sensor that read 0 cm after the report was made.
+const REPORT_MAX_H=12,DRY_CLIP_KM=.3;
+export function reconcileReports(items,now=Date.now()){
+ const dry=items.filter(i=>i.kind==='sensor'&&!i.subkind&&i.depthCm===0&&Number.isFinite(i.lat));let expired=0,clipped=0;
+ for(const r of items){if(r.subkind!=='bma-report')continue;const t=Date.parse(r.at);
+  if(!(now-t<=REPORT_MAX_H*3600000)){r.expired=true;expired++;continue;}
+  const newer=dry.filter(s=>Date.parse(s.at)>t);if(!newer.length)continue;
+  const near=q=>newer.some(s=>kmBetween([s.lat,s.lng],q)<=DRY_CLIP_KM),hit=newer.filter(s=>(r.lines||[]).some(l=>l.some(q=>kmBetween([s.lat,s.lng],q)<=DRY_CLIP_KM))||(Number.isFinite(r.lat)&&kmBetween([s.lat,s.lng],[r.lat,r.lng])<=DRY_CLIP_KM));
+  if(!hit.length)continue;
+  r.lines=keepRuns(densify(r.lines||[]),q=>!near(q)).map(l=>thinLine(l));r.dryNow=hit.map(s=>({title:s.title,at:s.at}));clipped++;
+  if(Number.isFinite(r.lat)&&near([r.lat,r.lng])){const q=r.lines[0]?.[Math.floor(r.lines[0].length/2)];r.lat=q?.[0]??null;r.lng=q?.[1]??null;}}  // marker off the dry spot
+ return {expired,clipped};}
+
 export async function bmaFloodAlert(g,idx){
- const html=await get(BMA_ALERT,'text',30000);const at=thaiStamp(html.replace(/<[^>]+>/g,' '));
+ const html=await get(BMA_ALERT,'text',30000),text=html.replace(/<[^>]+>/g,' ').replace(/\s+/g,' '),repStamp=thaiStamp(text),at=sensorStamp(text)||repStamp;
  const roads=jsConst(html,'ROADS')||[],geo=jsConst(html,'GEO')||{},rep=jsConst(html,'REPORTS')||{items:[]};
  const ROAD_LEVEL={R:'น้ำสูงเกิน 15 ซม.',r:'10–15 ซม.',a:'5–10 ซม.'},REP_LEVEL={H:'หนัก',M:'ปานกลาง',L:'เล็กน้อย'};
  const out=[];
@@ -168,7 +186,7 @@ export async function bmaFloodAlert(g,idx){
   out.push({id:'bma-road:'+r.n,kind:'official',subkind:'bma-road',source:'ระบบตรวจวัดน้ำท่วมถนน กทม. (now.bangkok.go.th)',sourceUrl:BMA_ALERT,at,province:'กรุงเทพฯ',lat:p?.[0]??null,lng:p?.[1]??null,precision:'point',
    title:`${r.n}: น้ำ ${r.m} ซม. (${ROAD_LEVEL[r.l]||r.l}) • เขต${r.d}`,detail:r.s,level:r.l,depthCm:r.m,closedM:r.g||0,
    sensors:(r.k||[]).map(k=>({code:k[0],where:k[1],cm:k[2],maxCm:k[4],segment:k[6]})),lines});}
- const repAt=rep.time&&at?new Date(at.slice(0,11)+rep.time+':00+07:00').toISOString():at;
+ const repAt=repStamp||(rep.time&&at?new Date(at.slice(0,11)+rep.time+':00+07:00').toISOString():at);
  // Reports the BMA page could not place (g=null): try our OSM name matcher within the district, else the district centre.
  const district=name=>(g?.districtsByName.get(name)||[]).find(p=>p.province==='กรุงเทพฯ');const polys=await khetPolygons();
  (rep.items||[]).forEach((x,n)=>{let lines=asLines(x.g),p=lines[0]?.[0]||null,matched=null,clip=null;const dc=district(x.d),rings=polys.get(x.d);
@@ -286,6 +304,7 @@ function refresh(){
   const results=await Promise.allSettled(Object.values(tasks).map(f=>f()));const sources={};const items=[];
   Object.keys(tasks).forEach((name,i)=>{const r=results[i];if(r.status==='fulfilled'){items.push(...r.value);sources[name]={ok:true,count:r.value.length};}else{sources[name]={ok:false,count:0,error:r.reason.message};errors.push({source:name,error:r.reason.message});}});
   const dropped=dedupeReports(items);if(dropped)sources.traffy.duplicates=dropped;
+  if(sources.bmaAlert)Object.assign(sources.bmaAlert,reconcileReports(items));
   let rain=[];try{rain=await rainRate();sources.rainRate={ok:true,count:rain.length};}catch(e){sources.rainRate={ok:false,count:0,error:e.message};errors.push({source:'rainRate',error:e.message});}
   const damRelease=damTimeline(items);
   const out={damRelease,fetchedAt,windowHours:{news:HOURS,social:HOURS,citizen:TRAFFY_HOURS,roadSensors:48},sources,errors,provinces:summarise(items,gaz),items,rainRate:{fields:['lat','lng','mm1h','mm24h'],stations:rain},
