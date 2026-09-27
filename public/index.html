@@ -11,9 +11,9 @@
  <fieldset><legend>แบบจำลองน้ำขังจากฝน</legend>
   <label class="f-row"><input type="checkbox" id="f-model" checked><i class="sw line" style="--c:#9c36b5"></i>บริเวณ/ถนนที่แบบจำลองมีน้ำ</label>
   <div class="f-sub">
-   <label>การระบายน้ำ (สมมติฐาน)<select id="f-scenario"><option value="0">ไม่ระบาย (0 มม./ชม.)</option><option value="3" selected>กลาง (กทม. ตามกำลังสูบ 1,300 ลบ.ม./วิ ≈ 2.9 มม./ชม. • ที่อื่น 3)</option><option value="8">มาก (8 มม./ชม.)</option></select></label>
+   <label>การระบายน้ำ (สมมติฐาน)<select id="f-scenario"><option value="0">ไม่ระบาย (0 มม./ชม.)</option><option value="3" selected>กลาง (กทม. กำลังสูบ 1,300 ลบ.ม./วิ ลดลงตามระดับน้ำในคลอง • ที่อื่น 3 มม./ชม.)</option><option value="8">มาก (8 มม./ชม.)</option></select></label>
    <label>แสดงเมื่อลึกตั้งแต่<select id="f-mindepth"><option value="2">2 ซม.</option><option value="10">10 ซม.</option><option value="30">30 ซม.</option><option value="50">50 ซม.</option></select></label>
-   <label>เวลา: <b id="f-time-label">–</b><input type="range" id="f-time" min="0" max="0" value="0"></label><small id="model-window" class="f-window"></small>
+   <label>เวลา: <b id="f-time-label">–</b><input type="range" id="f-time" min="0" max="0" value="0"></label><small id="model-window" class="f-window"></small><small id="model-canal" class="f-window"></small>
    <div class="f-depth"><span style="--c:#e599f7">2–10</span><span style="--c:#cc5de8">10–30</span><span style="--c:#9c36b5">30–50</span><span style="--c:#5f0f7a">≥50 ซม.</span></div>
   </div>
  </fieldset>

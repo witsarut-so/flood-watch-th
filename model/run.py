@@ -54,13 +54,16 @@ def validate(obs,depth,mask,affine,crs,times):
     wet=depth>=th;pad=np.pad(wet,((0,0),(1,1),(1,1)));near=np.zeros_like(wet)
     for dr in (0,1,2):
         for dc in (0,1,2):near|=pad[:,dr:dr+wet.shape[1],dc:dc+wet.shape[2]]
-    inside=mask>0;base_by_frame=[float(near[f][inside].mean()) if inside.any() else 0. for f in range(len(times))];res={'positives':0,'hits':0,'negatives':0,'falseAlarms':0,'baseRate':[],'kinds':{}}
+    inside=mask>0;base_by_frame=[float(near[f][inside].mean()) if inside.any() else 0. for f in range(len(times))];res={'positives':0,'hits':0,'negatives':0,'falseAlarms':0,'baseRate':[],'kinds':{},'nowPos':0,'nowHits':0}
     for o,x,y in zip(obs,xs,ys):
         at=datetime.fromisoformat(o['at'].replace('Z','+00:00'))
         if not t0<=at<=times[-1]+timedelta(hours=2):continue
         f=min(range(len(times)),key=lambda i:abs((times[i]-at).total_seconds()))
         c=int((x-affine.c)//affine.a);r=int((y-affine.f)//affine.e)
         if not(0<=r<mask.shape[0] and 0<=c<mask.shape[1]) or not inside[r,c]:continue
+        if o['wet'] and o['kind']!='satellite' and at>=times[-1]-timedelta(hours=NOW_H):
+            # "right now": the last hour's map against wet reports from the last NOW_H hours
+            res['nowPos']+=1;res['nowHits']+=int(near[-1,r,c])
         if o['wet']:
             k=res['kinds'].setdefault(o['kind'],[0,0,[]]);k[0]+=1;k[1]+=int(near[f,r,c]);k[2].append(base_by_frame[f])
             # satellite areas (mostly river flooding on farmland, often from before the rain window) are reported
@@ -70,7 +73,8 @@ def validate(obs,depth,mask,affine,crs,times):
         else:res['negatives']+=1;res['falseAlarms']+=int(wet[f,r,c])
     base=float(np.mean(res['baseRate'])) if res['baseRate'] else None
     return {'n':res['positives']+res['negatives'],'positives':res['positives'],'hits':res['hits'],'hitRate':res['hits']/res['positives'] if res['positives'] else None,'baseRate':base,
-        'negatives':res['negatives'],'falseAlarms':res['falseAlarms'],'falseAlarmRate':res['falseAlarms']/res['negatives'] if res['negatives'] else None,'byKind':{k:{'n':v[0],'hits':v[1],'hitRate':v[1]/v[0],'baseRate':float(np.mean(v[2]))} for k,v in res['kinds'].items()}}
+        'negatives':res['negatives'],'falseAlarms':res['falseAlarms'],'falseAlarmRate':res['falseAlarms']/res['negatives'] if res['negatives'] else None,'byKind':{k:{'n':v[0],'hits':v[1],'hitRate':v[1]/v[0],'baseRate':float(np.mean(v[2]))} for k,v in res['kinds'].items()},
+        'now':{'hours':NOW_H,'positives':res['nowPos'],'hitRate':res['nowHits']/res['nowPos'] if res['nowPos'] else None,'baseRate':base_by_frame[-1]}}
 
 def domain_bundle(bundle,meta,pad=.2):
     w,s,e,n=meta['bbox']
@@ -80,6 +84,9 @@ def domain_bundle(bundle,meta,pad=.2):
 # spread over the Bangkok cells of the grid (ThaiPublica interview with BMA, 2025). Elsewhere the 3 mm/h assumption stays.
 BMA_PUMPING_M3S=1300.
 MIN_DRY=20  # dry sensor readings needed before false alarms count in the score
+NOW_H=6;MIN_NOW=30  # the "right now" check: reports of the last NOW_H hours, used when there are MIN_NOW of them
+SOIL_MM=30.  # soil storage: infiltration stops once a cell has taken this much (saturated ground)
+CANAL_KM=4.  # canal stations within this distance set how much a Bangkok cell can drain
 SPINUP_H=24  # river-only warm-up so the channel is already flowing when the rain window starts
 
 def dam_series(points,times,lag_h):
@@ -95,12 +102,38 @@ def dam_series(points,times,lag_h):
         out.append(float(np.median(recent)) if recent else float(before[-1]) if before else float(act[0][1]))
     return out
 
+def canal_level_factor(c):
+    """Share of the pumping capacity a district can use given its canal level (BMA thresholds, m MSL): full below the
+    warning level, down to 20% at the control (critical) level, 0 at the bank. An assumption: pumps and gravity drains
+    discharge into these canals, and BMA stops/limits pumping into a canal above its control level."""
+    v,warn,crit,bank=c['levelM'],c.get('warningM'),c['criticalM'],c.get('bankM')
+    if warn is None or warn>=crit:warn=crit-.3
+    if v<=warn:return 1.
+    if v<=crit:return 1.-.8*(v-warn)/(crit-warn)
+    if bank is not None and bank>crit and v<bank:return .2*(bank-v)/(bank-crit)
+    return 0.
+
+def canal_factor(canals,cells,affine,crs):
+    """Per-cell drainage factor for Bangkok: inverse-distance mix of the canal stations within CANAL_KM; cells farther
+    from every station take the median of all stations (the city-wide state)."""
+    cs=[c for c in canals or [] if c.get('criticalM') is not None]
+    if not cs:return None
+    f=np.array([canal_level_factor(c) for c in cs],dtype='float32');med=float(np.median(f))
+    xs,ys=transform('EPSG:4326',crs,[c['lng'] for c in cs],[c['lat'] for c in cs])
+    R,C=cells.shape;grid=np.full((R,C),med,dtype='float32');rr,cc=np.nonzero(cells)
+    gx=(affine.c+(cc+.5)*affine.a).astype('float32');gy=(affine.f+(rr+.5)*affine.e).astype('float32')
+    num=np.zeros(len(rr),'float32');den=np.zeros(len(rr),'float32');lim=(CANAL_KM*1000)**2
+    for x,y,v in zip(xs,ys,f):
+        d2=(gx-x)**2+(gy-y)**2;w=np.where(d2<=lim,1/np.maximum(d2,200.**2),0.);num+=w*v;den+=w
+    grid[rr,cc]=np.where(den>0,num/np.maximum(den,1e-12),med)
+    return {'grid':grid,'stations':len(cs),'atOrAboveControl':int(sum(c['levelM']>=c['criticalM'] for c in cs)),'medianFactor':round(med,2),'meanFactorBangkok':round(float(grid[cells].mean()),2)}
+
 def set_threads(threads):
     try:
         import numba;numba.set_num_threads(threads)
     except (ImportError,ValueError):pass
 
-def setup(d,drain,river):
+def setup(d,drain,river,canals=()):
     """Grids and per-cell terms of one (domain, drainage scenario), with the river channel carved in."""
     base=ROOT/'data/domains'/d;s={}
     with rasterio.open(base/'dsm.tif') as src:z=src.read(1).astype(float);s['affine']=src.transform;s['crs']=src.crs
@@ -110,9 +143,13 @@ def setup(d,drain,river):
     names={p['code']:p['name'] for p in meta['provinces']}
     # drainage per cell: scenario value, with the Bangkok pumping capacity in the middle scenario
     drn=np.full(z.shape,float(drain));bkk=[c for c,nm in names.items() if nm=='กรุงเทพฯ']
-    if drain==3. and bkk:cells=(mask==bkk[0]);drn[cells]=BMA_PUMPING_M3S/(cells.sum()*dx*dx)*3.6e6
+    canal=None
+    if drain==3. and bkk:
+        cells=(mask==bkk[0]);drn[cells]=BMA_PUMPING_M3S/(cells.sum()*dx*dx)*3.6e6
+        canal=canal_factor(canals,cells,s['affine'],s['crs'])
+        if canal:drn[cells]*=canal['grid'][cells]
     inf=np.full(z.shape,INFILTRATION);h=np.zeros_like(z);channel=np.zeros(z.shape,dtype=bool)
-    s.update(bkk=bkk[0] if bkk else None,z=z,mask=mask,meta=meta,dx=dx,dt=dt,names=names,drn=drn,inf=inf,h=h,channel=channel,sink=None,wall=None,per_cell=None)
+    s.update(canal={k:v for k,v in canal.items() if k!='grid'} if canal else None,bkk=bkk[0] if bkk else None,z=z,mask=mask,meta=meta,dx=dx,dt=dt,names=names,drn=drn,inf=inf,h=h,channel=channel,sink=None,wall=None,per_cell=None)
     if river:
         with rasterio.open(base/'river.tif') as src:rv=src.read(1)
         channel=rv>0;z,ref=rv_mod.channel_bed(z,rv,river['channelDepthM']);h[channel]=(ref-z)[channel]  # smoothed bed, filled to the dry-season (DSM) level
@@ -124,18 +161,21 @@ def setup(d,drain,river):
     return s
 
 SPIN_DRAIN=3.  # the shared river warm-up uses the middle scenario's drainage
+def canals_path(out_dir):return Path(out_dir)/'_canals.json'
+def load_canals(out_dir):
+    p=canals_path(out_dir);return json.loads(p.read_text()) if p.exists() else []
 def spin_path(out_dir,d):return Path(out_dir)/f'_spinup-{d}.npz'
 
 def spinup_task(task):
     """River-only warm-up of one domain, shared by all its drainage scenarios (same river, no rain)."""
-    d,river,out_dir,threads=task;set_threads(threads);s=setup(d,SPIN_DRAIN,river)
+    d,river,out_dir,threads=task;set_threads(threads);s=setup(d,SPIN_DRAIN,river,load_canals(out_dir))
     out=simulate(s['z'],0,duration_s=SPINUP_H*3600,dx=s['dx'],dt=s['dt'],infiltration_mm_h=s['inf'],drainage_mm_h=s['drn'],initial=s['h'],capture=(),open_boundary=True,inflow_mm_h=s['per_cell'](river['q0']),sink=s['sink'],wall=s['wall'])
     np.savez(spin_path(out_dir,d),h=out['depth'],qx=out['flux'][0],qy=out['flux'][1]);return d
 
 def run_task(task):
     """One (domain, scenario): simulate hour by hour, write frames, return stats and validation."""
     d,k,drain,stations_xy,values,times,obs,out_dir,river,threads=task;set_threads(threads)
-    s=setup(d,drain,river);z,mask,meta,dx,dt,names,drn,inf,h,channel,sink,wall,per_cell,affine,crs=(s[k_] for k_ in ('z','mask','meta','dx','dt','names','drn','inf','h','channel','sink','wall','per_cell','affine','crs'))
+    s=setup(d,drain,river,load_canals(out_dir));z,mask,meta,dx,dt,names,drn,inf,h,channel,sink,wall,per_cell,affine,crs=(s[k_] for k_ in ('z','mask','meta','dx','dt','names','drn','inf','h','channel','sink','wall','per_cell','affine','crs'))
     yy,xx=np.indices(z.shape);gx=affine.c+(xx+.5)*affine.a;gy=affine.f+(yy+.5)*affine.e
     weights=np.array([1/np.maximum((gx-x)**2+(gy-y)**2,1000**2) for x,y in stations_xy],dtype='float32')
     del yy,xx,gx,gy
@@ -146,14 +186,16 @@ def run_task(task):
             sp=np.load(spin_path(out_dir,d));h=sp['h'].copy();flux=(sp['qx'].copy(),sp['qy'].copy())
     sim_fb={g['code']:[] for g in (checks if river else [])}
     balance={'initialM3':float(h.sum()*dx*dx),'rainM3':0.,'inflowM3':0.,'infiltrationM3':0.,'drainageM3':0.,'boundaryOutflowM3':0.,'sinkM3':0.}
-    depth=np.zeros((len(times),)+z.shape,dtype='uint8');frames=[];rain_means=[]
+    depth=np.zeros((len(times),)+z.shape,dtype='uint8');frames=[];rain_means=[];soil=np.zeros(z.shape,dtype='float32')
     for i,hour_values in enumerate(values):
         # inverse-distance weights renormalised over the stations that reported this hour (None = missing)
         avail=[j for j,v in enumerate(hour_values) if v is not None]
         rain=np.tensordot(np.asarray([hour_values[j] for j in avail],dtype='float32'),weights[avail],axes=1)/weights[avail].sum(axis=0);rain_means.append(float(rain[inside].mean()))
         if river and qs:inflow=per_cell(qs[i])
-        out=simulate(z,rain,dx=dx,dt=dt,infiltration_mm_h=inf,drainage_mm_h=drn,initial=h,capture=(3600,),open_boundary=True,inflow_mm_h=inflow,sink=sink,wall=wall,flux=flux);h=out['depth'];flux=out['flux']
+        inf_now=np.where(soil<SOIL_MM,inf,0.)  # saturated cells stop infiltrating
+        out=simulate(z,rain,dx=dx,dt=dt,infiltration_mm_h=inf_now,drainage_mm_h=drn,initial=h,capture=(3600,),open_boundary=True,inflow_mm_h=inflow,sink=sink,wall=wall,flux=flux);h=out['depth'];flux=out['flux']
         for key in ['rainM3','inflowM3','infiltrationM3','drainageM3','boundaryOutflowM3','sinkM3']:balance[key]+=out['balance'][key]
+        soil+=np.where((h>0)|(rain>0),inf_now,0.)  # ~mm taken this hour where water was available
         for g in (checks if river else []):sim_fb[g['code']].append(rv_mod.surface_sim(g,z,h))
         # the river channel itself is not "flooding": only water outside it is shown and counted
         shown=np.where(inside&~channel,h,0);depth[i]=np.minimum(np.round(shown*100),255).astype('uint8')
@@ -171,14 +213,19 @@ def run_task(task):
         tt=[datetime.fromisoformat(t) for t in times];obs={g['code']:rv_mod.hourly(g['series'],tt,'wl') for g in checks};cmp=rv_mod.compare(obs,sim_fb)
         if cmp:gauge_checks={'offsetM':cmp['offsetM'],'rmseM':cmp['rmseM'],'gauges':[{'code':g['code'],'name':g['name'],'lat':g['lat'],'lng':g['lng'],'distM':g['distM'],'bankM':g['bankM'],
             'obsM':obs[g['code']],'simM':[round(v+cmp['offsetM'],2) for v in sim_fb[g['code']]],'meanErrorM':cmp['meanErrorM'].get(g['code'])} for g in checks]}
-    return d,k,{'id':str(int(drain)),'index':k,'gaugeChecks':gauge_checks,'drainageMmH':drain,'bangkokDrainageMmH':bkk_rate,'infiltrationMmH':INFILTRATION,'roughness':.06,'rainMeanTotalMm':float(sum(rain_means)),'balance':balance,'validation':check,'frames':frames}
+    return d,k,{'id':str(int(drain)),'index':k,'canalLimit':s['canal'],'soilStorageMm':SOIL_MM,'gaugeChecks':gauge_checks,'drainageMmH':drain,'bangkokDrainageMmH':bkk_rate,'infiltrationMmH':INFILTRATION,'roughness':.06,'rainMeanTotalMm':float(sum(rain_means)),'balance':balance,'validation':check,'frames':frames}
 
 def skill(v):
     """Hit rate above chance for the same wet area, minus the false-alarm rate on dry sensors when there are enough
     of them. Plain hit rate would always favour the wettest map; plain hit-minus-false-alarm (Peirce) too, here,
-    because wet points (citizen reports) and dry points (road sensors) are different places."""
+    because wet points (citizen reports) and dry points (road sensors) are different places. When there are enough
+    recent reports, half the score is the "right now" check (last hour's map vs reports of the last NOW_H hours):
+    the page shows the latest hour by default, and a scenario that drains everything by then is of little use."""
     if not v.get('positives') or v.get('baseRate') is None:return None
-    return v['hitRate']-v['baseRate']-(v['falseAlarmRate'] if (v.get('negatives') or 0)>=MIN_DRY else 0.)
+    fa=v['falseAlarmRate'] if (v.get('negatives') or 0)>=MIN_DRY else 0.
+    whole=v['hitRate']-v['baseRate']-fa;now=v.get('now') or {}
+    if (now.get('positives') or 0)>=MIN_NOW:return .5*whole+.5*(now['hitRate']-now['baseRate']-fa)
+    return whole
 
 def main(input_path,out_dir):
     bundle=json.loads(Path(input_path).read_text());out_dir=Path(out_dir);out_dir.mkdir(parents=True,exist_ok=True)
@@ -220,6 +267,7 @@ def main(input_path,out_dir):
     cpus=os.cpu_count() or 2;workers=max(1,min(len(tasks),cpus//2,3));threads=max(1,cpus//workers)
     tasks=[tuple(t+[threads]) for t in tasks]
     # river domains: one shared warm-up first (runs while the other domains' scenarios are computed)
+    canals_path(out_dir).write_text(json.dumps(bundle.get('canalLimits') or []))
     spins={t[0]:t[8] for t in tasks if t[8] and t[8].get('q')}
     with ProcessPoolExecutor(max_workers=workers) as pool:
         warm=[pool.submit(spinup_task,(d,rv,str(out_dir),threads)) for d,rv in spins.items()]
@@ -229,6 +277,7 @@ def main(input_path,out_dir):
         for f in futs:
             d,k,sc=f.result();next(x for x in domains if x['id']==d)['scenarios'][k]=sc
     for d in spins:spin_path(out_dir,d).unlink(missing_ok=True)
+    canals_path(out_dir).unlink(missing_ok=True)
     for dom in domains:
         if dom.get('skipped'):continue
         for sc in dom['scenarios']:sc['validation']['skill']=skill(sc['validation'])

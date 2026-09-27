@@ -26,9 +26,20 @@ export async function modelInputs({archive=false}={}){if(cached&&Date.now()-Date
  const histories=await mapLimit(candidates,4,s=>fetchData('rain_24h_graph?station_id='+encodeURIComponent(s.id)));
  for(let i=0;i<histories.length;i++){const h=histories[i];if(h.status==='fulfilled'&&h.value.result==='OK'&&Array.isArray(h.value.data)){bundle.rainHistory.push({...candidates[i],samples:h.value.data.map(r=>({observedAt:time(r.rainfall_datetime),mm:num(r.rainfall_value)}))});}else bundle.errors.push({source:'rain_history',error:'Unable to load history for station '+candidates[i].id});}
  bundle.riverGauges=await riverGauges(domains).catch(err=>{bundle.errors.push({source:'river_gauges',error:err.message});return [];});
+ bundle.canalLimits=raw[1].status==='fulfilled'?canalLimits(raw[1].value,bbox):[];
  await mkdir(root,{recursive:true});const stamp=bundle.fetchedAt.replace(/[:.]/g,'-');const rawJson=JSON.stringify({feeds:raw.map(r=>r.status==='fulfilled'?r.value:{error:r.reason.message}),histories:histories.map(r=>r.status==='fulfilled'?r.value:{error:r.reason.message})});bundle.rawSha256=createHash('sha256').update(rawJson).digest('hex');if(archive){await writeFile(new URL(stamp+'-raw.json',root),rawJson);await writeFile(new URL(stamp+'-normalized.json',root),JSON.stringify(bundle));}await writeFile(new URL('latest.json',root),JSON.stringify(bundle));cached=bundle;return bundle;})();
  try{return await pending;}finally{pending=null;}
 }
+// BMA canal levels with their control thresholds (ThaiWater canal_waterlevel: m MSL; warning_level, critical_level =
+// BMA control level, bank). Only readings from the last 3 h. run.py turns them into how much a district can drain.
+export function canalLimits(data,bbox,now=Date.now()){
+ const out=[];
+ for(const r of data?.data||[]){const s=r.station||{},v=wlNum(r.canal_value),crit=wlNum(s.critical_level),warn=wlNum(s.warning_level),bank=wlNum(s.bank);
+  const lat=wlNum(s.canal_lat),lng=wlNum(s.canal_long),at=time(r.canal_datetime);
+  if(v===null||crit===null||lat===null||lng===null||!at||!(now-Date.parse(at)<=3*3600000))continue;
+  if(!inBox({lat,lng},bbox,PAD))continue;
+  out.push({id:s.id,name:s.canal_name?.th||'',lat,lng,at,levelM:v,warningM:warn,criticalM:crit,bankM:bank});}
+ return out;}
 // Water-level gauges along modelled rivers (ThaiWater waterlevel_load: level m MSL, bank levels, discharge) with their
 // hourly history (waterlevel_graph). Python keeps only those next to the river channel.
 const wlNum=v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null;
