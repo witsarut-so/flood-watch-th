@@ -81,3 +81,12 @@ def inlet(rv):
     cannot leave straight back through the open boundary."""
     wall=np.zeros(rv.shape,dtype=bool);wall[0,:]=rv[0,:]==2;cells=(rv==2)&~wall
     return cells,wall
+
+def cells_near(channel,affine,crs,lat,lng,radius=2):
+    """Channel cells within `radius` cells of the channel cell nearest (lat, lng): where a tributary enters."""
+    x,y=transform('EPSG:4326',crs,[lng],[lat]);c=int((x[0]-affine.c)//affine.a);r=int((y[0]-affine.f)//affine.e)
+    rr,cc=np.nonzero(channel)
+    if not len(rr):return np.zeros(channel.shape,dtype=bool)
+    k=int(np.argmin((rr-r)**2+(cc-c)**2));r0,c0=int(rr[k]),int(cc[k])
+    near=np.zeros(channel.shape,dtype=bool);near[max(0,r0-radius):r0+radius+1,max(0,c0-radius):c0+radius+1]=True
+    return near&channel

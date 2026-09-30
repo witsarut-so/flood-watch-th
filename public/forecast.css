@@ -36,3 +36,8 @@
 @media(max-width:1000px){.fc-grid{grid-template-columns:1fr}.fc-side{max-height:none}}
 @media(max-width:760px){.fc-hero h1{font-size:19px}.fc-map{height:62svh;min-height:380px}.fc-seg button{padding:7px 10px;font-size:12px}.fc-tile b{font-size:21px}}
 .fc-zoom{display:flex;gap:6px}.fc-zoom button{padding:7px 10px}
+.fc-toggles select{padding:4px 6px;font-size:12px}
+.inund-grid{display:grid;grid-template-columns:1fr 1.3fr;gap:18px;margin-top:10px}.inund-chart{width:100%;height:auto;max-height:200px;background:#f8faf9;border-radius:10px}
+.inund-table{min-width:460px}.inund-table td:nth-child(n+2){white-space:nowrap}.inund-table b.new{color:#d9480f}
+@media(max-width:1000px){.inund-grid{grid-template-columns:1fr}}
+.inund-table b.dam{color:#e00028}.inund-table th small{font-weight:400}

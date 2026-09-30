@@ -72,17 +72,12 @@ const lastIdx=(a,upto)=>{for(let i=upto;i>=0;i--)if(a[i]!==null)return i;return 
 // Tidal = low-lying station near the coast whose level swings > 35 cm within two days (a flashy hill river also swings).
 function tidal(lvl,end,st){if(!(st.lat<14.3&&st.bank<6))return false;const w=lvl.slice(Math.max(0,end-48),end+1).filter(v=>v!==null);if(w.length<30)return false;return Math.max(...w)-Math.min(...w)>.35;}
 
-// Dam release plan → hourly release (m3/s). A newer Chao Phraya Dam figure from the news feed overrides the file.
+// Dam release plan → hourly release (m3/s).
 function planSeries(g,dam,scenario){
  const pts=[...dam.schedule].map(p=>({t:Date.parse(p.from),m3s:p.m3s})).sort((a,b)=>a.t-b.t),a=new Array(g.N).fill(null);
  for(let i=0;i<g.N;i++){const t=(g.base+i)*3600000;let v=pts[0].m3s;for(const p of pts)if(p.t<=t)v=p.m3s;a[i]=v;}
  if(scenario==='high'&&dam.high){const t1=Date.parse(dam.high.by),t0=g.NOW;const i1=Math.min(g.N-1,g.idx(t1));for(let i=t0;i<g.N;i++){const f=i1>t0?Math.min(1,(i-t0)/(i1-t0)):1;a[i]=Math.max(a[i],a[t0]+(dam.high.m3s-a[t0])*f);}}
  return a;
-}
-function newsOverride(plans,damRelease){
- const cp=plans.dams.find(d=>d.id==='chaophraya');if(!cp||!damRelease?.points?.length)return;
- const last=damRelease.points.filter(p=>p.type==='actual').at(-1);const lastPlan=cp.schedule.at(-1);
- if(last&&Date.parse(last.at)>Date.parse(lastPlan.from)&&last.m3s!==lastPlan.m3s)cp.schedule.push({from:last.at,m3s:last.m3s,source:last.source+' (จากข่าวล่าสุด)',url:last.url});
 }
 
 // --- methods -----------------------------------------------------------------------------------------------------
@@ -133,7 +128,9 @@ function forecastStation(st,g,end,flows,plans,scenario,hind){
  if(route&&st.q&&st.q[last]!==null){
   let upQ,lag;
   if(route.dam){const dam=plans.dams.find(d=>d.id===route.dam);upQ=planSeries(g,dam,scenario);lag=route.dam==='pasak'?(dam.travelToStationH?.[st.code]??15):0;
-   if(route.dam==='chaophraya'&&!hind){q=st.q.slice();for(let i=last+1;i<=upto;i++)q[i]=upQ[i];}
+   // the gauge below the dam is the truth up to now: plan steps dated before the last reading only apply if the gauge agrees
+   if(route.dam==='chaophraya'&&!hind){q=st.q.slice();const next=dam.schedule.map(p=>g.idx(Date.parse(p.from))).filter(i=>i>last).sort((a,b)=>a-b)[0]??Infinity;
+    for(let i=last+1;i<=upto;i++)q[i]=i<next&&scenario!=='high'?st.q[last]:i<next?Math.max(st.q[last],upQ[i]+st.q[last]-upQ[last]):upQ[i];}
    else if(route.dam==='chaophraya'){q=st.q.slice();for(let i=last+1;i<=upto;i++)q[i]=st.q[i]??st.q[i-1];}  // hindcast: release as measured
    info={dam:dam.name,lagH:lag};}
   else{upQ=route.up.map(c=>flows[c]).reduce((s,a)=>a&&s?s.map((v,i)=>v===null||a[i]===null||a[i]===undefined?null:v+a[i]):null,new Array(g.N).fill(0));
@@ -177,15 +174,18 @@ async function dams(){
 const RAIN_POINTS=[['กรุงเทพฯ ฝั่งตะวันออก',13.78,100.72],['กรุงเทพฯ ชั้นใน',13.75,100.52],['กรุงเทพฯ ฝั่งธนบุรี',13.72,100.43],['นนทบุรี',13.86,100.5],['ปทุมธานี',14.02,100.6],['สมุทรปราการ',13.6,100.6],['พระนครศรีอยุธยา',14.35,100.57],['อ่างทอง',14.59,100.45],['ลพบุรี',14.8,100.65],['สระบุรี',14.53,100.91],['นครนายก',14.2,101.21],['ปราจีนบุรี',14.05,101.37],['ฉะเชิงเทรา',13.69,101.07],['สุพรรณบุรี',14.47,100.12],['นครปฐม',13.82,100.06],['กาญจนบุรี',14.02,99.53],['ชัยนาท',15.19,100.12],['นครสวรรค์',15.7,100.12]];
 async function rainOutlook(){
  const lat=RAIN_POINTS.map(p=>p[1]).join(','),lng=RAIN_POINTS.map(p=>p[2]).join(',');
- const d=await get(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&hourly=precipitation,precipitation_probability&forecast_hours=${AHEAD+1}&timezone=Asia%2FBangkok`);
- return (Array.isArray(d)?d:[d]).map((r,k)=>{const p=r.hourly.precipitation,pp=r.hourly.precipitation_probability||[];
-  return {name:RAIN_POINTS[k][0],lat:RAIN_POINTS[k][1],lng:RAIN_POINTS[k][2],windows:Object.fromEntries(HORIZONS.map(h=>[h,{mm:round(p.slice(h-12,h).reduce((s,v)=>s+(v||0),0),1),probPct:Math.max(0,...pp.slice(h-12,h).filter(v=>v!=null))}]))};});
+ const d=await get(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&hourly=precipitation,precipitation_probability&past_hours=6&forecast_hours=${AHEAD+1}&timezone=Asia%2FBangkok`);
+ // hourly totals ending at each timestamp (Asia/Bangkok); the 6 past hours bridge the gap to the flood model's last rain hour
+ return (Array.isArray(d)?d:[d]).map((r,k)=>{const all=r.hourly.precipitation,times=r.hourly.time.map(t=>Date.parse(t+':00+07:00')),i0=Math.max(0,times.findIndex(t=>t>=Math.floor(Date.now()/3600000)*3600000));
+  const p=all.slice(i0),pp=(r.hourly.precipitation_probability||[]).slice(i0);
+  return {name:RAIN_POINTS[k][0],lat:RAIN_POINTS[k][1],lng:RAIN_POINTS[k][2],windows:Object.fromEntries(HORIZONS.map(h=>[h,{mm:round(p.slice(h-12,h).reduce((s,v)=>s+(v||0),0),1),probPct:Math.max(0,...pp.slice(h-12,h).filter(v=>v!=null))}])),
+   hourly:{startAt:new Date(times[0]).toISOString(),mm:all.map(v=>v==null?null:round(v,1))}};});
 }
 
 // --- job ----------------------------------------------------------------------------------------------------------
 export async function buildForecast({evidence}={}){
  const now=Date.now(),g=grid(now),errors=[];
- const plans=JSON.parse(await readFile(PLANS,'utf8'));newsOverride(plans,evidence?.damRelease);
+ const plans=JSON.parse(await readFile(PLANS,'utf8'));
  const [stR,damR,rainR]=await Promise.allSettled([stations(g),dams(),rainOutlook()]);
  if(stR.status==='rejected')throw Error('ThaiWater water levels: '+stR.reason.message);
  const sts=stR.value;if(damR.status==='rejected')errors.push({source:'dams',error:damR.reason.message});if(rainR.status==='rejected')errors.push({source:'rain',error:rainR.reason.message});
@@ -211,7 +211,18 @@ export async function buildForecast({evidence}={}){
  const risk=Object.fromEntries(HORIZONS.map(h=>[h,out.filter(s=>s.forecast[h]?.pct>=100).map(s=>({code:s.code,name:s.name,province:s.province,amphoe:s.amphoe,tambon:s.tambon,pct:s.forecast[h].pct,riseM:round(s.forecast[h].level-s.levelNow),newly:s.pctNow<100})).sort((a,b)=>b.pct-a.pct)]));
  return {issuedAt:new Date(now).toISOString(),horizons:HORIZONS,plans,stations:out.sort((a,b)=>(b.forecast[36]?.pct??0)-(a.forecast[36]?.pct??0)),risk,
   dams:damR.status==='fulfilled'?damR.value:[],rain:rainR.status==='fulfilled'?rainR.value:[],canals:await withCanalLines(canalSummary(evidence)),errors,
+  modelDrivers:modelDrivers(g,byCode,base,high,rainR.status==='fulfilled'?rainR.value:[]),
   method:{stations:out.length,note:'ระดับสูงสุดในแต่ละช่วง 12 ชม. • flow = ส่งต่ออัตราการไหลจากต้นน้ำตามเวลาเดินทาง • regress = ระดับน้ำเทียบกับอัตราการไหลต้นน้ำย้อนหลัง 10 วัน (+น้ำขึ้นน้ำลง) • trend = แนวโน้ม 6 ชม. ล่าสุด หน่วงลง • ค่าคลาดเคลื่อนย้อนหลัง = พยากรณ์จาก 36 ชม. ก่อน เทียบค่าที่วัดได้จริง (ใช้น้ำต้นทางที่วัดจริง)'}};
+}
+
+// Hourly inputs for the 2D flood model's forward run (model/run.py): routed discharge at the stations where rivers enter
+// the central domain (base and high dam-release scenarios; measured for the past hours) and the hourly rain forecast.
+const MODEL_INFLOWS=['C.7A','S.26'];
+function modelDrivers(g,byCode,base,high,rain){
+ const from=g.NOW-24,series=(res,c)=>{const f=res.get(c),st=byCode.get(c);if(!st?.q)return null;let last=null;const out=[];
+  for(let i=from;i<=g.NOW+AHEAD;i++){const v=f?.q?.[i]??st.q[i]??null;if(v!=null)last=v;out.push(last==null?null:round(last,0));}return out;};
+ const q={};for(const c of MODEL_INFLOWS){const b=series(base,c);if(b)q[c]={base:b,high:series(high,c)||b,method:base.get(c)?.method||null};}
+ return {startAt:g.time(from),stepH:1,q,rain:rain.filter(r=>r.hourly).map(r=>({name:r.name,lat:r.lat,lng:r.lng,...r.hourly}))};
 }
 
 // Bangkok canals from the evidence feed (BMA): per station, plus per canal the worst station.

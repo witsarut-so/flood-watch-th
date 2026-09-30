@@ -12,8 +12,58 @@ function initMap(){
  $('map').classList.add('muted-base');
  for(const [name,z] of [['mentions',380],['evidence',450]])map.createPane(name).style.zIndex=z;
 }
+// --- 2D flood model forward run (/live/model/latest.json: scenario.forecast, frames every 6 h) ----------------------
+let model=null,domInfo=null,paintTok=0;const bytesCache=new Map();
+async function bytes(url){if(!bytesCache.has(url))bytesCache.set(url,(async()=>{const r=await fetch(url);if(!r.ok)throw Error(r.status);const b=new Uint8Array(await r.arrayBuffer());
+ return b[0]===0x1f&&b[1]===0x8b?new Uint8Array(await new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()):b;})());return bytesCache.get(url);}
+async function loadModel(){try{[model,domInfo]=await Promise.all([fetch('/live/model/latest.json',{cache:'no-cache'}).then(r=>r.json()),fetch('/data/domains.json').then(r=>r.json())]);}catch{model=null;}}
+function fwd(){const d=model?.domains?.find(x=>x.scenarios?.some(s=>s?.forecast));if(!d)return null;return {d,f:d.scenarios.find(s=>s?.forecast).forecast};}
+const variant=()=>$('t-variant').value;
+function frameAt(x,h){const fr=x.f[variant()]?.frames||[];return fr.find(f=>f.hoursAhead===h)||fr.at(-1);}
+const BINS=[[2,[229,153,247]],[10,[204,93,232]],[30,[156,54,181]],[50,[95,15,122]]];
+async function floodLayer(tok){
+ const x=fwd();if(!x)return;const info=domInfo?.domains.find(d=>d.id===x.d.id);if(!info)return;
+ const fr=frameAt(x,horizon),f0=x.f[variant()].frames[0],hf=x.f.hold?.frames.find(f=>f.hoursAhead===fr.hoursAhead);
+ const [idxB,dep,dep0,hold]=await Promise.all([bytes(`/data/overview/${x.d.id}.bin.gz`),bytes(model.base+fr.file),bytes(model.base+f0.file),hf&&horizon?bytes(model.base+hf.file):null]);if(tok!==paintTok)return;
+ const idx=new Uint32Array(idxB.buffer,idxB.byteOffset,idxB.byteLength/4),{width:W,height:H,bounds:[w,s,e,n]}=info.overview;
+ const cv=document.createElement('canvas');cv.width=W;cv.height=H;const ctx=cv.getContext('2d'),img=ctx.createImageData(W,H),px=img.data;
+ for(let p=0;p<idx.length;p++){const c=idx[p];if(c===0xFFFFFFFF)continue;const v=dep[c];if(v<2)continue;const o=p*4;
+  if(hold&&hold[c]<2){px[o]=224;px[o+1]=0;px[o+2]=40;px[o+3]=240;continue;}  // wet only because of the added release (dry if inflow held)
+  if(horizon&&dep0[c]<2){px[o]=255;px[o+1]=140;px[o+2]=0;px[o+3]=225;continue;}  // newly flooded since the issue hour
+  let col=BINS[0][1];for(const [t,rgb] of BINS)if(v>=t)col=rgb;px[o]=col[0];px[o+1]=col[1];px[o+2]=col[2];px[o+3]=200;}
+ ctx.putImageData(img,0,0);layers.flood?.remove();layers.flood=L.imageOverlay(cv.toDataURL(),[[s,w],[n,e]],{pane:'flood',opacity:.85,interactive:false,className:'pixelated'}).addTo(map);
+}
+function inund(){
+ const x=fwd();if(!x){$('inund-note').textContent=model?'รอบนี้แบบจำลองยังไม่ได้คำนวณไปข้างหน้า (รอผลรอบถัดไป ทุก 2 ชม.)':'โหลดผลแบบจำลองไม่ได้';return;}
+ const F=x.f,v=F[variant()],fr=frameAt(x,horizon||12),f0=v.frames[0],num1=n=>n.toLocaleString('th-TH',{maximumFractionDigits:1});
+ $('inund-note').innerHTML=`คำนวณเมื่อ ${esc(time(model.issuedAt))} • จำลองต่อจากสภาพน้ำ ณ ${esc(time(F.issuedAt))} ไปอีก ${F.hours} ชม. • น้ำเข้าแม่น้ำเจ้าพระยาที่ ${esc(F.inflowStation)} ตาม<b>อัตราระบายเขื่อน</b>ที่ส่งต่อตามเวลาเดินทาง + แม่น้ำป่าสักที่อยุธยา + ฝนคาดการณ์ • <b style="color:#e00028">สีแดง</b> = ท่วมเพราะน้ำเขื่อนที่เพิ่มขึ้น (ถ้าน้ำเข้าคงที่ระดับปัจจุบันจะไม่ท่วม) • <b style="color:#e8590c">สีส้ม</b> = น้ำที่ล้นตลิ่งอยู่แล้วแผ่ขยายต่อ/ฝน (แบบจำลองเริ่มจากพื้นแห้งเมื่อ ~2.5 วันก่อน พื้นที่ส้มหลายแห่งจึงอาจท่วมอยู่แล้วในความจริง) • น้ำที่ปล่อยจากเขื่อนเจ้าพระยาใช้เวลา ~14 ชม. ถึงอ่างทอง และอีก ~1–2 วันถึงนนทบุรี/กทม. ผลส่วนใหญ่ต่อ กทม. จึงอยู่หลัง 36 ชม.`;
+ const tot=o=>Object.values(o.provincesKm2).reduce((a,b)=>a+b,0);
+ $('inund-tiles').innerHTML=[[`ท่วมเพิ่มเพราะน้ำเขื่อนที่เพิ่มขึ้น (+${fr.hoursAhead} ชม.)`,num1(fr.damKm2??0),'ตร.กม.','red'],[`ท่วมเพิ่มทั้งหมดใน ${fr.hoursAhead} ชม.`,num1(fr.newKm2),'ตร.กม.','orange'],['พื้นที่มีน้ำ (นอกลำน้ำ) ตอนนี้',num1(tot(f0)),'ตร.กม.','blue'],[`พื้นที่มีน้ำ +${fr.hoursAhead} ชม.`,num1(tot(fr)),'ตร.กม.','blue']]
+  .map(([k,val,u,c])=>`<div class="fc-tile ${c}"><small>${esc(k)}</small><b>${esc(val)}<em>${u}</em></b></div>`).join('');
+ $('inund-area-title').textContent=`อำเภอ/เขตที่แบบจำลองมีน้ำท่วมเพิ่ม ภายใน ${fr.hoursAhead} ชม. (${variant()==='high'?'สมมติฐานสูง':'ระบายตามประกาศ'})`;
+ const rows=[...fr.areas].sort((a,b)=>(b.damKm2||0)-(a.damKm2||0)||b.newKm2-a.newKm2).filter(a=>a.newKm2>=.05||a.km2>=1).slice(0,30);
+ $('inund-rows').innerHTML=rows.map(a=>`<tr><td>${esc(a.kind)}${esc(a.name)} <small>${esc(a.province)}</small></td><td>${a.damKm2>=.05?`<b class="dam">+${num1(a.damKm2)}</b>`:'–'}</td><td>${a.newKm2>=.05?`<b class="new">+${num1(a.newKm2)}</b>`:'–'}</td><td>${num1(a.km2)}</td><td>${num1(a.deepKm2)}</td></tr>`).join('')||'<tr><td colspan="4">แบบจำลองไม่มีพื้นที่ท่วมเพิ่มในช่วงนี้</td></tr>';
+ const svg=$('inund-chart'),ns='http://www.w3.org/2000/svg',el=(n,a)=>{const e=document.createElementNS(ns,n);for(const k in a)e.setAttribute(k,a[k]);return e;};svg.replaceChildren();
+ const ser=k=>F[k].inflow.map(r=>[Date.parse(r[0]),r[1],r[2][0]||0]),B=ser('base'),Hh=ser('high'),all=[...B,...Hh];
+ const t0=all[0][0],t1=all.at(-1)[0],vmax=Math.max(...all.map(r=>r[1]))*1.08,X=t=>44+(t-t0)/(t1-t0||1)*466,Y=v=>150-v/vmax*135;
+ for(const val of [0,vmax/2,vmax]){svg.append(el('line',{x1:44,x2:510,y1:Y(val),y2:Y(val),stroke:'#e3e9e6'}));const tx=el('text',{x:40,y:Y(val)+4,'text-anchor':'end','font-size':10,fill:'#6b7f79'});tx.textContent=Math.round(val).toLocaleString('th-TH');svg.append(tx);}
+ const line=(rows,k,col,dash)=>svg.append(el('polyline',{points:rows.map(r=>`${X(r[0])},${Y(r[k])}`).join(' '),fill:'none',stroke:col,'stroke-width':2.5,'stroke-dasharray':dash||''}));
+ line(Hh,1,'#e8590c','5 3');line(B,1,'#1971c2');line(B,2,'#2f9e44');
+ for(const t of [t0,t1]){const tx=el('text',{x:X(t),y:166,'text-anchor':t===t0?'start':'end','font-size':10,fill:'#6b7f79'});tx.textContent=time(new Date(t).toISOString());svg.append(tx);}
+ const tt=Date.parse(fr.validAt);svg.append(el('line',{x1:X(tt),x2:X(tt),y1:10,y2:150,stroke:'#adb5bd','stroke-dasharray':'2 3'}));
+ $('inund-inflow').innerHTML=`<span style="color:#1971c2">━</span> เจ้าพระยาเข้าพื้นที่ (${esc(F.inflowStation)} หน่วง ${F.inflowLagHours} ชม.) ${num(B[0][1])} → ${num(B.at(-1)[1])} • <span style="color:#e8590c">┅</span> สมมติฐานสูง → ${num(Hh.at(-1)[1])} • <span style="color:#2f9e44">━</span> ป่าสักที่อยุธยา (S.26 หน่วง ${F.tributaries[0]?.lagHours??'–'} ชม.) ${num(B[0][2])} → ${num(B.at(-1)[2])}`;
+ const gl=Object.entries(fr.riverLevelsM||{}),st=new Map(FL.data.stations.map(s=>[s.code,s]));
+ $('inund-method').innerHTML=[
+  'แบบจำลองการไหลบนผิวดิน 2 มิติ (local-inertial) กริด 100 ม. บนภูมิประเทศ Copernicus DSM ครอบคลุม กทม. นนทบุรี ปทุมธานี อยุธยา สมุทรปราการ นครปฐม • น้ำในร่องแม่น้ำเจ้าพระยาไหลตามจริง ล้นตลิ่งเมื่อระดับน้ำสูงกว่าพื้นที่ข้างเคียง',
+  'เริ่มจากสภาพน้ำที่แบบจำลองย้อนหลัง (ฝน 36 ชม. + น้ำที่วัดจริงที่ C.7A และ S.26) แล้วคำนวณต่อไปข้างหน้าด้วยปริมาณน้ำที่คาดว่าจะเข้ามา: อัตราไหลที่ C.7A จากแผนระบายเขื่อนเจ้าพระยาส่งต่อตามเวลาเดินทาง, แม่น้ำป่าสักจาก S.26, ฝนรายชั่วโมงจาก Open-Meteo • สมมติฐานการระบายน้ำ (สูบ/ท่อ) กลาง',
+  gl.length?`ตรวจความสอดคล้อง: ระดับน้ำแม่น้ำในแบบจำลองที่ +${fr.hoursAhead} ชม. / คาดการณ์รายสถานี — ${gl.map(([c,val])=>{const s=st.get(c),p=s?.forecast?.[horizon||12];return `${esc(c)} ${f2(val)}${p?` / ${f2(p.level)}`:''} ม.`;}).join(' • ')}`:'',
+  '<b>ข้อจำกัด:</b> พื้นที่ชายทะเลสมุทรปราการ (บ่อปลา/นากุ้ง ความสูงต่ำ) อาจเกินจริง • ไม่มีคันกั้นน้ำ/กำแพงริมแม่น้ำ ประตูระบายน้ำ และคลองซอย (เช่น คลองบางบัวทอง คลองพระพิมล) ในแบบจำลอง • ใช้ DSM (รวมอาคาร/ต้นไม้) ไม่ใช่ความสูงพื้นดินจริง • ไม่มีน้ำทะเลหนุนที่ปากแม่น้ำ (ระดับน้ำ กทม. ช่วงน้ำขึ้นอาจต่ำกว่าจริง) • ไม่รวมแม่น้ำน้อย/ท่าจีน • ความลึกเป็นค่าเฉลี่ยของเซลล์ 100 ม. ใช้ดูว่า<b>น้ำจะไปทางไหนและพื้นที่ไหนเพิ่มขึ้น</b> ไม่ใช่ความลึกหน้าบ้าน'
+ ].filter(Boolean).map(t=>`<li>${t}</li>`).join('');
+}
+
 function paintMap(){
- for(const l of Object.values(layers))l.remove();layers={};const d=FL.data;
+ for(const l of Object.values(layers))l.remove();layers={};const d=FL.data;const tok=++paintTok;
+ if($('t-flood').checked)floodLayer(tok).catch(()=>{});
  if($('t-rain').checked&&horizon)layers.rain=rainLayer(d).addTo(map);
  if($('t-canal').checked)layers.canal=FL.canalLayer().addTo(map);
  if($('t-dam').checked)layers.dam=damLayer(d).addTo(map);
@@ -96,15 +146,18 @@ function rain(d){
 }
 
 async function start(){
- initMap();
+ initMap();map.createPane('flood').style.zIndex=360;map.getPane('flood').style.pointerEvents='none';
+ const mp=loadModel();
  try{await FL.load();}catch{$('fc-issued').textContent='โหลดข้อมูลคาดการณ์ไม่สำเร็จ • ลองรีเฟรชอีกครั้ง';return;}
  const d=FL.data;
  $('fc-issued').innerHTML=`ออกเมื่อ <b>${esc(time(d.issuedAt))}</b> • ${d.stations.length} สถานีวัดระดับน้ำ ภาคกลาง ตะวันออก ตะวันตก • ค่าที่ +12/+24/+36 ชม. คือ<b>ระดับสูงสุด</b>ในช่วง 12 ชม. นั้น • อัปเดตทุก 30 นาที`;
  $('fc-status').innerHTML=`<i></i> ออก ${esc(time(d.issuedAt))}`;$('footer-updated').textContent='• ข้อมูลล่าสุด '+time(d.issuedAt);
  tiles(d);damPlans(d);chain($('chain-cp'),CHAIN_CP,d);chain($('chain-ps'),CHAIN_PS,d);damRows(d);canals(d);rain(d);
- const setH=h=>{horizon=h;for(const b of document.querySelectorAll('.fc-seg button'))b.classList.toggle('on',+b.dataset.h===h);paintMap();riskList(d);};
+ const setH=h=>{horizon=h;for(const b of document.querySelectorAll('.fc-seg button'))b.classList.toggle('on',+b.dataset.h===h);paintMap();riskList(d);if(model)inund();};
  for(const b of document.querySelectorAll('.fc-seg button'))b.onclick=()=>setH(+b.dataset.h);
- for(const id of ['t-river','t-canal','t-dam','t-rain'])$(id).onchange=paintMap;
+ for(const id of ['t-river','t-canal','t-dam','t-rain','t-flood'])$(id).onchange=paintMap;
+ $('t-variant').onchange=()=>{paintMap();if(model)inund();};
+ mp.then(()=>{inund();paintMap();});
  setH(24);
  const bkk=()=>{$('t-canal').checked=true;paintMap();map.setView([13.79,100.62],11);};$('go-bkk').onclick=bkk;$('go-all').onclick=()=>map.setView([14.1,100.55],8);
  if(new URLSearchParams(location.search).get('view')==='bkk')bkk();

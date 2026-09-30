@@ -45,7 +45,17 @@
     "note": "Inflow: measured discharge at C.7A Ban Bang Kaeo (Ang Thong, ~12 km inside the north edge; 2 h). Fallback: news-reported Chao Phraya Dam release delayed lagHours (Chainat -> Ayutthaya ~24 h, Spring News 2022). Gauges matching gaugeCodes near the channel are used to check water levels.",
     "inflowStation": "C.7A",
     "inflowLagHours": 2,
-    "gaugeCodes": "^(C\\.|CPY)"
+    "gaugeCodes": "^(C\\.|CPY|S\\.26$)",
+    "tributaries": [
+     {
+      "name": "แม่น้ำป่าสัก",
+      "station": "S.26",
+      "lagHours": 8,
+      "lat": 14.3505,
+      "lng": 100.5795,
+      "note": "Pa Sak joins the Chao Phraya at Ayutthaya (Wat Phanan Choeng). Discharge measured below Rama VI Dam (S.26, ~25 km upstream), delayed ~8 h, injected into the channel cells nearest the confluence."
+     }
+    ]
    }
   },
   {
