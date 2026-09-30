@@ -37,6 +37,7 @@ function paintEvidence(){
  const counts={};
  for(const [k,layer] of Object.entries(evidenceLayers)){layer.clearLayers();const on=$('f-'+k)?.checked;if(on)layer.addTo(map);else map.removeLayer(layer);}
  for(const i of evidenceData.items){
+  if(i.subkind==='bma-canal')continue;  // Bangkok canals: forecast-layers.js (coloured canal stretches)
   const k=kindOf(i);if(!visible(i,k)||(k==='bmareport'&&i.expired))continue;counts[k]=(counts[k]||0)+1;
   // mentioned places: drawn lines/points for every visible item that resolved one
   if($('f-mentions').checked&&$('f-'+k)?.checked)for(const g of i.geo||[]){if(!g.drawn)continue;
@@ -62,7 +63,8 @@ function paintEvidence(){
    layer=L.circleMarker([i.lat,i.lng],{...style,radius,fillColor:k==='road'&&!(i.depthCm>0)?'#adb5bd':k==='dam'&&i.storagePercent>=80?'#a61e4d':evidenceKinds[k]});}
   layer.bindPopup(()=>popup(i),{maxWidth:300}).addTo(evidenceLayers[k]);
  }
- for(const k of Object.keys(evidenceKinds)){const el=$('c-'+k);if(el)el.textContent=(counts[k]||0).toLocaleString('th-TH');}
+ for(const k of Object.keys(evidenceKinds)){const el=$('c-'+k);if(el&&k!=='canal')el.textContent=(counts[k]||0).toLocaleString('th-TH');}
+ const fl=$('c-flood');if(fl)fl.textContent=((counts.bmaroad||0)+(counts.bmareport||0)+(counts.road||0)).toLocaleString('th-TH');const tk=$('c-talk');if(tk)tk.textContent=((counts.news||0)+(counts.social||0)).toLocaleString('th-TH');
  const m=evidenceData.items.reduce((n,i)=>n+(i.geo||[]).filter(g=>g.drawn).length,0);$('c-mentions').textContent=m.toLocaleString('th-TH');
 }
 
@@ -86,7 +88,7 @@ function paintRain(){
 }
 
 function renderSituation(){
- const d=evidenceData;if(typeof renderSatelliteSummary==="function")renderSatelliteSummary(d);
+ const d=evidenceData;
  $('ev-status').textContent=`อัปเดต ${thaiTime(d.fetchedAt)} (${ago(d.fetchedAt)}) • ข่าว/โซเชียลย้อนหลัง ${d.windowHours.news} ชม. • รายงานประชาชน ${d.windowHours.citizen} ชม.`+(d.errors.length?` • บางแหล่งดึงไม่สำเร็จ: ${[...new Set(d.errors.map(e=>e.source.split(':')[0]))].join(', ')}`:'');
  const br=d.items.filter(i=>i.subkind==='bma-road'),rr=d.items.filter(i=>i.subkind==='bma-report'&&!i.expired),rx=d.items.filter(i=>i.subkind==='bma-report'&&i.expired).length;
  if(br.length||rr.length)$('ev-status').textContent+=` • กทม.: จุดวัดพบน้ำ ${br.length} ถนน, รายงานเขต ${rr.length} จุด (จุดวัด ${br[0]?thaiTime(br[0].at):'–'}${rr[0]?`, รายงานเขต ${thaiTime(rr[0].at)}`:''})${rx?` • ไม่แสดงรายงานเขตเก่าเกิน 12 ชม. ${rx} จุด`:''}`;else if(d.sources?.bmaAlert&&!d.sources.bmaAlert.ok)$('ev-status').textContent+=' • ดึงข้อมูลเตือนภัย กทม. ไม่สำเร็จ';
@@ -119,7 +121,7 @@ async function loadEvidence(){
  evidenceTimer=setTimeout(loadEvidence,document.hidden?600000:300000);
 }
 onFilter(['f-citizen-hours'],()=>{if(evidenceData?.lite&&needFull()){clearTimeout(evidenceTimer);$('ev-status').textContent='กำลังโหลดรายงานประชาชนช่วงที่เลือก…';loadEvidence();}});
-onFilter(['f-bmaroad','f-bmareport','f-bmaapprox','f-citizen','f-social','f-road','f-rain','f-dam','f-news','f-flow','f-canal','f-gate','f-mentions','f-citizen-hours','f-road-wet'],paintEvidence);
+onFilter(['f-bmaroad','f-bmareport','f-bmaapprox','f-citizen','f-social','f-road','f-rain','f-dam','f-news','f-flow','f-gate','f-mentions','f-citizen-hours','f-road-wet'],paintEvidence);
 onFilter(['f-rainrate'],paintRain);
 if(map){let t,wasNear=map.getZoom()>=11;map.on('moveend',()=>{clearTimeout(t);t=setTimeout(paintRain,200);});map.on('zoomend',()=>{const near=map.getZoom()>=11;if(near!==wasNear){wasNear=near;paintEvidence();}});}
 loadEvidence();

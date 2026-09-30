@@ -1,5 +1,5 @@
 // Jobs shared by the local server and GitHub Actions. Outputs are static files under public/live/:
-//   evidence.json, waterlevels.json, satellite.json (runEvidenceJob)
+//   evidence.json, waterlevels.json, forecast.json (runEvidenceJob)
 //   model/latest.json, model/<runId>/*.bin.gz  (runModelJob)
 // CLI: node jobs.mjs evidence | model [--force] | thai [--no-upload]
 import {execFile} from 'node:child_process';
@@ -7,11 +7,10 @@ import {promisify} from 'node:util';
 import {mkdir,readFile,writeFile,readdir,rm,rename} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {modelInputs} from './model-inputs.mjs';
-import {getEvidence,bmaFloodAlert,traffyDirect,textContext} from './evidence.mjs';
+import {getEvidence,bmaFloodAlert,bmaCanals,traffyDirect,textContext} from './evidence.mjs';
+import {buildForecast} from './forecast.mjs';
 import {gzipSync,gunzipSync} from 'node:zlib';
 import {getWater} from './live-water.mjs';
-import {gistdaFlood,summariseSatellite,satelliteObservations} from './satellite.mjs';
-import {terrainMetadata} from './model-inputs.mjs';
 
 const run=promisify(execFile),root=fileURLToPath(new URL('.',import.meta.url));
 const LIVE=root+'public/live/',RUNS=root+'data/runs/';
@@ -22,26 +21,12 @@ async function writeAtomic(path,text){await writeFile(path+'.tmp',text);await re
 export async function runEvidenceJob(){
  await mkdir(LIVE,{recursive:true});
  const ev=await getEvidence({wait:true});const {refreshing,...clean}=ev;
- clean.satellite=await runSatellite();if(clean.satellite.error)clean.errors.push({source:'GISTDA',error:clean.satellite.error});
  await writeAtomic(LIVE+'evidence.json',JSON.stringify(clean));
  await writeAtomic(LIVE+'evidence-lite.json',JSON.stringify(liteEvidence(clean)));
  try{const w=await getWater();await writeAtomic(LIVE+'waterlevels.json',JSON.stringify(w));}catch(e){console.error('[waterlevels]',e.message);}
+ try{await writeAtomic(LIVE+'forecast.json',JSON.stringify(await buildForecast({evidence:clean})));}catch(e){console.error('[forecast]',e.message);}
  return {fetchedAt:ev.fetchedAt,items:ev.items.length,errors:ev.errors.map(e=>e.source)};
 }
-
-// GISTDA satellite flood areas: refreshed at most every SAT_REFRESH_H (passes come a few times a week), the last
-// good pull kept on failure. Full layer -> public/live/satellite.json; summary -> evidence.json (.satellite).
-const SAT_CACHE=root+'data/evidence/satellite.json',SAT_REFRESH_H=3;
-async function runSatellite(){
- let sat=null,error=null;try{sat=await readJson(SAT_CACHE);}catch{}
- if(!sat||Date.now()-Date.parse(sat.fetchedAt)>SAT_REFRESH_H*3600000){
-  try{const t=await terrainMetadata();if(!t)throw Error('no model domains');
-   const fresh=await gistdaFlood({key:process.env.GISTDA_API_KEY,bbox:t.bbox.map(v=>+v.toFixed(3))});
-   sat={...fresh,fetchedAt:new Date().toISOString()};await mkdir(root+'data/evidence',{recursive:true});await writeAtomic(SAT_CACHE,JSON.stringify(sat));}
-  catch(e){error=e.message+(sat?` • ใช้ข้อมูลที่ดึงได้ล่าสุดเมื่อ ${sat.fetchedAt}`:'');}}
- if(!sat)return {ok:false,error};
- await writeAtomic(LIVE+'satellite.json',JSON.stringify(sat));
- return {ok:!error,...(error?{error}:{}),fetchedAt:sat.fetchedAt,source:sat.source,sourceUrl:sat.sourceUrl,window:sat.window,passes:sat.passes,features:sat.features.length,summary:summariseSatellite(sat).slice(0,40)};}
 
 // Thai relay (run on a machine in Thailand, e.g. by launchd every 30 min): fetch the sources that only answer from
 // Thai networks and upload data/evidence/thai.json.gz to release "live". A source that fails this round keeps its
@@ -62,8 +47,9 @@ async function dispatchWorkflows(env){
 export async function runThaiJob({upload=true}={}){
  const {gaz,idx}=await textContext(),file=root+'data/evidence/thai.json.gz',now=new Date().toISOString();
  let prev={};try{prev=JSON.parse(gunzipSync(await readFile(file)));}catch{}
- const out={fetchedAt:now,bma:prev.bma||null,traffy:prev.traffy||null},errors=[],report={};
+ const out={fetchedAt:now,bma:prev.bma||null,traffy:prev.traffy||null,canals:prev.canals||null},errors=[],report={};
  try{const items=await bmaFloodAlert(gaz,idx);if(!items.length)throw Error('no items');out.bma={ok:true,fetchedAt:now,items};report.bma=items.length;}catch(e){report.bma='failed: '+e.message;}
+ try{const items=await bmaCanals();if(!items.length)throw Error('no items');out.canals={ok:true,fetchedAt:now,items};report.canals=items.length;}catch(e){report.canals='failed: '+e.message;}
  try{const items=await traffyDirect(errors,idx);if(!items.length||items[0].stale)throw Error(errors.at(-1)?.error||'no fresh items');out.traffy={ok:true,fetchedAt:now,items};report.traffy=items.length;}catch(e){report.traffy='failed: '+String(e.message).slice(0,120);}
  await mkdir(root+'data/evidence',{recursive:true});await writeFile(file,gzipSync(JSON.stringify(out)));
  if(upload){const token=(await run('gh',['auth','token','-u',RELAY_GH_USER])).stdout.trim();
@@ -92,8 +78,10 @@ export async function runModelJob({force=false,ifOlderThanMinutes=0}={}){
   const data={...await modelInputs()};
   // Point observations for validation only (not assimilated): open citizen reports (resolved tickets say nothing about the water now), BMA official flooded roads/reports (wet), road sensors (0 = dry).
   // News-outlet social posts that name a specific road (resolved to OSM) add wet points at that road.
-  try{const ev=await readJson(LIVE+'evidence.json');data.observations=ev.items.filter(i=>(i.kind==='citizen'&&i.status!=='เสร็จสิ้น')||(i.kind==='sensor'&&!i.subkind)||((i.subkind==='bma-road'||i.subkind==='bma-report')&&!i.expired&&i.precision==='point'&&Number.isFinite(i.lat))).map(i=>({kind:i.subkind?.startsWith('bma')?'bma':i.kind,lat:i.lat,lng:i.lng,at:i.at,wet:i.kind==='citizen'||i.subkind?.startsWith('bma')||i.depthCm>=5}));for(const i of ev.items)if(i.subkind==='media')for(const g of i.geo||[])if(g.drawn&&g.lines?.[0]?.length){const p=g.lines[0][Math.floor(g.lines[0].length/2)];data.observations.push({kind:'media',lat:p[0],lng:p[1],at:i.at,wet:true});}try{data.observations.push(...satelliteObservations(await readJson(LIVE+'satellite.json')));}catch{}data.damRelease=ev.damRelease||null;data.evidenceFetchedAt=ev.fetchedAt;}
+  try{const ev=await readJson(LIVE+'evidence.json');data.observations=ev.items.filter(i=>(i.kind==='citizen'&&i.status!=='เสร็จสิ้น')||(i.kind==='sensor'&&!i.subkind)||((i.subkind==='bma-road'||i.subkind==='bma-report')&&!i.expired&&i.precision==='point'&&Number.isFinite(i.lat))).map(i=>({kind:i.subkind?.startsWith('bma')?'bma':i.kind,lat:i.lat,lng:i.lng,at:i.at,wet:i.kind==='citizen'||i.subkind?.startsWith('bma')||i.depthCm>=5}));for(const i of ev.items)if(i.subkind==='media')for(const g of i.geo||[])if(g.drawn&&g.lines?.[0]?.length){const p=g.lines[0][Math.floor(g.lines[0].length/2)];data.observations.push({kind:'media',lat:p[0],lng:p[1],at:i.at,wet:true});}data.damRelease=ev.damRelease||null;data.evidenceFetchedAt=ev.fetchedAt;}
   catch{data.observations=[];}
+  // ThaiWater's BMA canal readings can stall; then use the live BMA levels (with ThaiWater thresholds) from the evidence feed
+  if(!data.canalLimits?.length)try{const ev=await readJson(LIVE+'evidence.json');data.canalLimits=ev.items.filter(i=>i.subkind==='bma-canal'&&!i.offline&&i.criticalM!=null&&Date.now()-Date.parse(i.at)<=3*3600000).map(i=>({id:i.code,name:i.canal,lat:i.lat,lng:i.lng,at:i.at,levelM:i.levelM,warningM:i.warningM,criticalM:i.criticalM,bankM:i.bankM}));}catch{}
   await mkdir(RUNS,{recursive:true});const input=RUNS+runId+'-input.json',out=LIVE+'model/'+runId+'/';
   await writeFile(input,JSON.stringify(data));
   await run(PYTHON,[root+'model/run.py',input,out],{cwd:root,timeout:3*3600000,maxBuffer:1e6});

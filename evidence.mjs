@@ -96,8 +96,40 @@ async function canalFlow(){
  return d.data.map(r=>{const s=r.station||{},at=bkkTime(r.flow_datetime);return {id:'flow:'+s.id,kind:'official',subkind:'flow',source:(r.agency?.agency_name?.th||'ThaiWater')+' ผ่าน ThaiWater',sourceUrl:TW+'flow',lat:Number(s.flow_lat),lng:Number(s.flow_long),precision:'point',at,title:`อัตราการไหล ${s.flow_name?.th||''}: ${r.flow_value} ลบ.ม./วินาที`,flowM3s:Number(r.flow_value),province:r.geocode?.province_name?.th==='กรุงเทพมหานคร'?'กรุงเทพฯ':r.geocode?.province_name?.th};})
   .filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.flowM3s)&&fresh(x.at,24));
 }
-async function canalLevels(){
- return normalize(await get(TW+'canal_waterlevel'),'canal',[97,5,106,21]).filter(s=>s.levelRaw!==null&&fresh(s.observedAt,6)).map(s=>({id:'canal:'+s.id,kind:'official',subkind:'canal',source:(s.agency||'ThaiWater')+' ผ่าน ThaiWater',sourceUrl:TW+'canal_waterlevel',lat:s.lat,lng:s.lng,precision:'point',at:s.observedAt,title:`ระดับน้ำคลอง ${s.name||''}: ${s.levelRaw} ม.`,levelM:s.levelRaw,province:null}));
+// Bangkok canal levels: live level and BMA status per station from now.bangkok.go.th (ThaiWater's copy of the same
+// readings stopped updating on 28 Sep 2026), joined by station code with the warning / control (critical) / bank
+// levels ThaiWater keeps for that station. Trend = change per hour against the snapshot ~3 h earlier (local history).
+// now.bangkok.go.th answers only from Thai networks, so this also runs in the Thai relay.
+const BMA_CANAL='https://now.bangkok.go.th/canal-water-data.json',CANAL_HISTORY=new URL('./data/evidence/canal-history.json',import.meta.url);
+const CANAL_STATE={'วิกฤต':'critical','เตือนภัย':'warning','ปกติ':'normal','ขัดข้อง':'offline'};
+export async function bmaCanals(){
+ const [d,tw]=await Promise.all([get(BMA_CANAL,'json',30000),get(TW+'canal_waterlevel').catch(()=>null)]);
+ if(!Array.isArray(d?.stations))throw Error('canal-water-data: unexpected response');
+ const thr=new Map((tw?.data||[]).map(r=>[r.station?.canal_oldcode,r.station]));
+ let hist=[];try{hist=JSON.parse(await readFile(CANAL_HISTORY));}catch{}
+ const n=v=>v===null||v===undefined||v===''||!Number.isFinite(Number(v))?null:Number(v);
+ const items=d.stations.filter(s=>Number.isFinite(s.lat)&&Number.isFinite(s.lng)).map(s=>{
+  const t=thr.get(s.code)||{},at=s.observedAt?new Date(s.observedAt).toISOString():null,level=n(s.levelM),warn=n(t.warning_level),crit=n(t.critical_level),bank=n(t.bank);
+  const offline=level===null||!fresh(at,3)||s.status==='ขัดข้อง';
+  const state=offline?'offline':CANAL_STATE[s.status]||(crit!==null&&level>=crit?'critical':warn!==null&&level>=warn?'warning':'normal');
+  // same station ~3 h (2–5 h) before this reading
+  const past=hist.map(h=>({t:Date.parse(h.at),v:h.levels[s.code]})).filter(h=>h.v!=null&&at&&Date.parse(at)-h.t>=2*3600000&&Date.parse(at)-h.t<=5*3600000).sort((a,b)=>b.t-a.t)[0];
+  const trend=!offline&&past?+((level-past.v)/((Date.parse(at)-past.t)/3600000)).toFixed(3):null;
+  const over=crit!==null&&level!==null?+(level-crit).toFixed(2):null;
+  return {id:'bma-canal:'+s.code,kind:'official',subkind:'bma-canal',source:'สำนักการระบายน้ำ กทม. (now.bangkok.go.th)',sourceUrl:'https://now.bangkok.go.th/',lat:s.lat,lng:s.lng,precision:'point',at,province:'กรุงเทพฯ',
+   title:`${s.name}: ${level??'–'} ม.รทก. • ${s.status}`,code:s.code,canal:s.river||s.name,district:s.district,status:s.status,state,offline,levelM:level,outsideM:n(s.outsideLevelM),warningM:warn,criticalM:crit,bankM:bank,overM:over,trendMPerH:trend,fetchedAt:d.lastFetchedAt||null};});
+ const snap={at:new Date().toISOString(),levels:Object.fromEntries(items.filter(i=>!i.offline).map(i=>[i.code,i.levelM]))};
+ hist=[...hist.filter(h=>Date.now()-Date.parse(h.at)<36*3600000),snap];
+ await mkdir(new URL('./data/evidence/',import.meta.url),{recursive:true});await writeFile(CANAL_HISTORY,JSON.stringify(hist));
+ return items;
+}
+const CANAL_CACHE=new URL('./data/evidence/canals-last-good.json',import.meta.url);
+async function canalsWithRelay(errors){
+ const relay=await relayPart('canals');if(relay&&minutesSince(relay.fetchedAt)<=RELAY_FRESH_MIN)return relayItems(relay,'เครื่องในไทย');
+ try{const items=await bmaCanals();await writeFile(CANAL_CACHE,JSON.stringify({fetchedAt:new Date().toISOString(),items}));return items;}
+ catch(e){
+  if(relay){errors.push({source:'bmaCanals',error:`${e.message} • ใช้ข้อมูลจากเครื่องในไทยเมื่อ ${relay.fetchedAt}`});return relayItems(relay,'เครื่องในไทย');}
+  try{const last=JSON.parse(await readFile(CANAL_CACHE));errors.push({source:'bmaCanals',error:`${e.message} • ใช้ข้อมูลที่ดึงสำเร็จล่าสุดเมื่อ ${last.fetchedAt}`});return last.items.map(i=>({...i,stale:true,fetchedAt:last.fetchedAt}));}catch{throw e;}}
 }
 async function waterGates(){
  const d=await get(TW+'watergate_load');const rows=d.watergate_data?.data||[];
@@ -303,7 +335,7 @@ function refresh(){
   gaz??=buildGazetteer(JSON.parse(await readFile(new URL('./data/gazetteer/th-admin.json',import.meta.url))).places);
   const errors=[],fetchedAt=new Date().toISOString(),idx=await namedIndex();
   if(!idx)errors.push({source:'named',error:'ยังไม่มีฐานชื่อถนน/หมู่บ้าน (รัน model/build_static.py)'});
-  const tasks={bmaAlert:()=>bmaWithFallback(gaz,idx,errors),traffy:()=>traffyWithRelay(errors,idx),roadSensors,heavyRain,dams,canalFlow,canalLevels,waterGates,social:()=>bluesky(gaz,idx,errors),mediaFeed:()=>mediaFeed(gaz,idx),news:()=>news(gaz,errors,idx)};
+  const tasks={bmaAlert:()=>bmaWithFallback(gaz,idx,errors),traffy:()=>traffyWithRelay(errors,idx),roadSensors,heavyRain,dams,canalFlow,canals:()=>canalsWithRelay(errors),waterGates,social:()=>bluesky(gaz,idx,errors),mediaFeed:()=>mediaFeed(gaz,idx),news:()=>news(gaz,errors,idx)};
   const results=await Promise.allSettled(Object.values(tasks).map(f=>f()));const sources={};const items=[];
   Object.keys(tasks).forEach((name,i)=>{const r=results[i];if(r.status==='fulfilled'){items.push(...r.value);sources[name]={ok:true,count:r.value.length};}else{sources[name]={ok:false,count:0,error:r.reason.message};errors.push({source:name,error:r.reason.message});}});
   const dropped=dedupeReports(items);if(dropped)sources.traffy.duplicates=dropped;
@@ -311,7 +343,7 @@ function refresh(){
   let rain=[];try{rain=await rainRate();sources.rainRate={ok:true,count:rain.length};}catch(e){sources.rainRate={ok:false,count:0,error:e.message};errors.push({source:'rainRate',error:e.message});}
   const damRelease=damTimeline(items);
   const out={damRelease,fetchedAt,windowHours:{news:HOURS,social:HOURS,citizen:TRAFFY_HOURS,roadSensors:48},sources,errors,provinces:summarise(items,gaz),items,rainRate:{fields:['lat','lng','mm1h','mm24h'],stations:rain},
-   notes:['รายงานประชาชน (Traffy) เป็นเรื่องร้องเรียน ไม่ได้ตรวจสอบภาคสนาม และครอบคลุมกรุงเทพฯ เป็นหลัก','ข่าวถูกจัดตำแหน่งจากชื่อสถานที่ในข้อความ ละเอียดสุดระดับตำบล/แขวง ไม่ใช่จุดเกิดเหตุจริง','ความลึกจากข่าว/รายงานเป็นตัวเลขที่ผู้เขียนระบุ หรือประมาณจากคำอย่าง "ระดับเข่า" (ทำเครื่องหมายว่าประมาณ)','เซนเซอร์ถนนและเขื่อนอาจล่าช้า ดูเวลาของแต่ละรายการ','ชื่อถนน/ซอย/หมู่บ้านถูกจับคู่กับ OSM เฉพาะเมื่อบริบทชัดเจน ถนนยาวถูกตัดเฉพาะช่วงใกล้พื้นที่ที่ระบุ','โซเชียล: Bluesky (เฉพาะโพสต์ที่ระบุสถานที่ในไทย) และโพสต์ Instagram/TikTok ของบัญชีสำนักข่าว (เก็บโดยโปรเจกต์ flood-social-feed) ไม่รวมโพสต์ของบุคคลทั่วไป','ถนนน้ำท่วมทางการของ กทม. มาจาก now.bangkok.go.th (จุดวัด + รายงานสำนักงานเขต) อัปเดตตามรอบของ กทม.','อัตราการสูบของสถานีสูบน้ำไม่มีข้อมูลสาธารณะ แสดงเฉพาะอัตราการไหลในคลองและระดับน้ำประตูระบายน้ำ']};
+   notes:['รายงานประชาชน (Traffy) เป็นเรื่องร้องเรียน ไม่ได้ตรวจสอบภาคสนาม และครอบคลุมกรุงเทพฯ เป็นหลัก','ข่าวถูกจัดตำแหน่งจากชื่อสถานที่ในข้อความ ละเอียดสุดระดับตำบล/แขวง ไม่ใช่จุดเกิดเหตุจริง','ความลึกจากข่าว/รายงานเป็นตัวเลขที่ผู้เขียนระบุ หรือประมาณจากคำอย่าง "ระดับเข่า" (ทำเครื่องหมายว่าประมาณ)','เซนเซอร์ถนนและเขื่อนอาจล่าช้า ดูเวลาของแต่ละรายการ','ชื่อถนน/ซอย/หมู่บ้านถูกจับคู่กับ OSM เฉพาะเมื่อบริบทชัดเจน ถนนยาวถูกตัดเฉพาะช่วงใกล้พื้นที่ที่ระบุ','โซเชียล: Bluesky (เฉพาะโพสต์ที่ระบุสถานที่ในไทย) และโพสต์ Instagram/TikTok ของบัญชีสำนักข่าว (เก็บโดยโปรเจกต์ flood-social-feed) ไม่รวมโพสต์ของบุคคลทั่วไป','ถนนน้ำท่วมทางการของ กทม. มาจาก now.bangkok.go.th (จุดวัด + รายงานสำนักงานเขต) อัปเดตตามรอบของ กทม.','อัตราการสูบของสถานีสูบน้ำไม่มีข้อมูลสาธารณะ แสดงเฉพาะอัตราการไหลในคลองและระดับน้ำประตูระบายน้ำ','ระดับน้ำคลอง กทม. และสถานะ (ปกติ/เตือนภัย/วิกฤต) มาจาก now.bangkok.go.th • ระดับเตือน/ระดับควบคุม/ตลิ่ง จาก ThaiWater ตามรหัสสถานี']};
   await mkdir(new URL('./data/evidence/',import.meta.url),{recursive:true});await writeFile(new URL('./data/evidence/latest.json',import.meta.url),JSON.stringify(out));
   cache=out;return out;})().finally(()=>{pending=null;});
  return pending;

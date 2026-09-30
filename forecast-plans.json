@@ -1,0 +1,35 @@
+{
+ "note": "Dam release plans announced by RID (from news), used as the future inflow of the river forecast. Times are Asia/Bangkok. Update when a new announcement comes out; the newest Chao Phraya Dam figure found in the news feed overrides this file when it is newer.",
+ "updatedAt": "2026-09-30T13:00:00+07:00",
+ "dams": [
+  {
+   "id": "chaophraya",
+   "name": "เขื่อนเจ้าพระยา (ชัยนาท)",
+   "station": "C.13",
+   "lat": 15.1573, "lng": 100.1797,
+   "schedule": [
+    {"from": "2026-09-29T16:00:00+07:00", "m3s": 2200, "source": "ไทยพีบีเอส / ไทยโพสต์ 29 ก.ย. 2569", "url": "https://www.thaipost.net/x-cite-news/1079089/"},
+    {"from": "2026-09-30T12:00:00+07:00", "m3s": 2500, "source": "ไทยรัฐ 30 ก.ย. 2569 (สำนักงานชลประทานที่ 12)", "url": "https://www.thairath.co.th/news/politic/2963087"}
+   ],
+   "outlook": "C.2 นครสวรรค์คาดสูงสุดราว 3,000 ลบ.ม./วินาที วันที่ 2 ต.ค. รวมลำน้ำสาขา 700–750 และรับน้ำเข้าคลองชลประทานสองฝั่ง 550–580 ลบ.ม./วินาที",
+   "high": {"m3s": 2800, "by": "2026-10-02T12:00:00+07:00", "why": "ถ้าน้ำที่ C.2 ขึ้นถึง ~3,000 ลบ.ม./วินาที ตามที่กรมชลฯ คาด เขื่อนอาจต้องเพิ่มการระบายอีก (สมมติฐานสูง ไม่ใช่ประกาศ)"}
+  },
+  {
+   "id": "pasak",
+   "name": "เขื่อนป่าสักชลสิทธิ์ (ลพบุรี)",
+   "lat": 14.8697, "lng": 101.0706,
+   "travelToStationH": {"S.9": 15},
+   "schedule": [
+    {"from": "2026-09-28T00:00:00+07:00", "m3s": 25, "source": "ผู้จัดการออนไลน์ 28 ก.ย. 2569", "url": "https://mgronline.com/local/detail/9690000095010"},
+    {"from": "2026-09-30T00:00:00+07:00", "m3s": 115, "source": "ผู้จัดการออนไลน์ (แผนเพิ่มระบาย)", "url": "https://mgronline.com/local/detail/9690000095010"},
+    {"from": "2026-10-01T00:00:00+07:00", "m3s": 230, "source": "ผู้จัดการออนไลน์ (แผนเพิ่มระบาย)", "url": "https://mgronline.com/local/detail/9690000095010"},
+    {"from": "2026-10-02T00:00:00+07:00", "m3s": 400, "source": "ผู้จัดการออนไลน์ (แผนเพิ่มระบาย)", "url": "https://mgronline.com/local/detail/9690000095010"}
+   ],
+   "outlook": "เก็บกัก 96.49% น้ำไหลเข้า ~738 ลบ.ม./วินาที • กรมชลฯ คาดระดับน้ำแม่น้ำป่าสักสูงขึ้น 3.50–4.00 ม. แต่ยังไม่ล้นตลิ่ง"
+  }
+ ],
+ "tide": {
+  "note": "สทนช. เตือนน้ำทะเลหนุนสูง 29 ก.ย. – 4 ต.ค. 2569 • กทม. คาดสูงสุดราว +2.0 ม.รทก.",
+  "url": "https://www.thaipost.net/general-news/1078499/"
+ }
+}

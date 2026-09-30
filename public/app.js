@@ -15,13 +15,18 @@ let map=null,tileLayer=null,provinceLayer=null,domainsInfo=null;
 const TILE_URL='https://tile.openstreetmap.org/{z}/{x}/{y}.png',TILE_ATTRIBUTION='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
 // Filter state: checkbox/select values survive reloads for this viewer only.
-const FILTER_KEY='thara-filters-v2';
+const FILTER_KEY='thara-filters-v3';
 function loadFilters(){let saved={};try{saved=JSON.parse(localStorage.getItem(FILTER_KEY)||'{}');}catch{}for(const el of document.querySelectorAll('#filters input[id^="f-"],#filters select[id^="f-"]')){if(!(el.id in saved)||el.id==='f-time')continue;if(el.type==='checkbox')el.checked=!!saved[el.id];else if([...(el.options||[])].some(o=>o.value===saved[el.id]))el.value=saved[el.id];}}
 function saveFilters(){const out={};for(const el of document.querySelectorAll('#filters input[id^="f-"],#filters select[id^="f-"]'))if(el.id!=='f-time')out[el.id]=el.type==='checkbox'?el.checked:el.value;try{localStorage.setItem(FILTER_KEY,JSON.stringify(out));}catch{}}
 const filterHandlers=[];
 function onFilter(ids,fn){filterHandlers.push([new Set(ids),fn]);}
-document.addEventListener('change',e=>{if(!e.target.closest?.('#filters'))return;saveFilters();for(const [ids,fn] of filterHandlers)if(ids.has(e.target.id))fn();});
+// One visible switch (g-*) drives several layer checkboxes kept hidden in #f-hidden, so the layer code is unchanged.
+const FILTER_GROUPS={'g-flood':['f-bmaroad','f-bmareport','f-road'],'g-talk':['f-news','f-social','f-mentions'],'g-water':['f-river','f-canalway','f-drain','f-waterarea'],'g-roads':['f-road-major','f-road-secondary','f-road-minor']};
+document.addEventListener('change',e=>{if(!e.target.closest?.('#filters'))return;
+ const ids=new Set([e.target.id]);for(const id of FILTER_GROUPS[e.target.id]||[]){$(id).checked=e.target.checked;ids.add(id);}
+ saveFilters();const run=new Set();for(const [set,fn] of filterHandlers)if([...ids].some(id=>set.has(id)))run.add(fn);for(const fn of run)fn();});
 loadFilters();
+for(const [g,ids] of Object.entries(FILTER_GROUPS))if($(g))for(const id of ids)$(id).checked=$(g).checked;
 
 if(typeof L!=='undefined'){
  map=L.map('map',{zoomControl:false}).setView([13.9,100.6],8);L.control.zoom({position:'topright'}).addTo(map);L.control.scale({position:'bottomright',imperial:false}).addTo(map);
@@ -53,12 +58,4 @@ fetchJson('/data/places.json').then(rows=>{const list=$('place-list');const frag
  for(const [name,level,province,lat,lng] of rows){const label=level===4?`${name} (จังหวัด)`:`${name} • ${province} (${lvl[level]})`;if(placeIndex.has(label))continue;placeIndex.set(label,[lat,lng,level]);const o=document.createElement('option');o.value=label;frag.append(o);}list.append(frag);}).catch(()=>{});
 $('place-search').addEventListener('change',e=>{const v=e.target.value.trim(),hit=placeIndex.get(v)||[...placeIndex].find(([k])=>k.startsWith(v))?.[1];if(hit&&map){map.setView([hit[0],hit[1]],hit[2]===4?10:hit[2]===6?13:14);if(!wide())setPanel(false);}});
 
-// ThaiWater water-level stations (metres above mean sea level; never converted to street depth).
-const gaugeLayer=typeof L!=='undefined'?L.layerGroup():null;let gaugesLoaded=false;
-async function paintGauges(){
- if(!map)return;if(!$('f-gauges').checked){map.removeLayer(gaugeLayer);return;}gaugeLayer.addTo(map);if(gaugesLoaded)return;
- try{const d=await fetchJson('/live/waterlevels.json',{cache:'no-cache'});gaugesLoaded=true;$('c-gauges').textContent=d.stations.length.toLocaleString('th-TH');
-  for(const s of d.stations)L.circleMarker([s.lat,s.lng],{pane:'evidence',radius:4.5,color:'#fff',weight:1,fillColor:'#1971c2',fillOpacity:.9}).bindPopup(()=>`<b>${esc(s.name)}</b><br>ระดับน้ำ ${esc(s.levelMsl.toFixed(2))} ม.รทก. (เทียบระดับทะเล ไม่ใช่ความลึก)<br><small>${esc(s.agency)} • ${esc(thaiTime(s.observedAt))} (${esc(ago(s.observedAt))})</small>`).addTo(gaugeLayer);}
- catch{$('c-gauges').textContent='!';}
-}
-onFilter(['f-gauges'],paintGauges);paintGauges();
+// River stations (% of bank, with forecast) and Bangkok canals are drawn by forecast-layers.js.

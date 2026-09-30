@@ -78,3 +78,12 @@ footer{max-width:1600px;margin:0 auto;padding:0 max(16px,3%) 28px;font-size:11px
 .gauge-table td.ok{color:#2b8a3e}.gauge-table td.warn{color:#e67700}.gauge-table td.bad{color:#c92a2a}
 #river-gauges{overflow-x:auto}
 .sat-summary{margin-top:14px}.sat-summary h3 small{font-weight:400;color:#6b7f79}
+/* simplified filter panel */
+.f-forecast{display:block;margin:10px 0 2px;padding:10px 12px;border-radius:10px;background:linear-gradient(135deg,#0b7285,#087c68);color:#fff;text-decoration:none;box-shadow:0 2px 8px #087c6833}.f-forecast b{display:block;font-size:14px}.f-forecast span{font-size:11px;opacity:.9}.f-forecast:hover{filter:brightness(1.08)}
+.f-mini{padding:2px 4px!important;font-size:11px!important;border-radius:6px;margin-left:2px}
+.f-indent{margin:0 0 4px 26px}
+.f-legend{display:flex;flex-wrap:wrap;gap:3px 4px;margin:10px 0 0;font-size:10px;color:#6b7f79}.f-legend b{flex-basis:100%;font-size:10.5px;color:#278c79}.f-legend span{flex:1;min-width:40px;border-top:5px solid var(--c);padding-top:2px;text-align:center}
+.f-more{margin:8px 0 0;border-top:1px solid #e8eeeb;padding-top:6px}.f-more summary{cursor:pointer;font-size:11.5px;font-weight:600;color:#278c79;padding:4px 0}.f-more .f-sub{margin-left:0}
+.sw.canalbar{background:linear-gradient(90deg,#e03131 0 40%,#f59f00 40% 70%,#2f9e44 70%);height:5px}
+.sw.pctbar{background:conic-gradient(#e03131 0 33%,#f76707 0 55%,#f5b400 0 75%,#4c9be8 0)}
+.fl-pop{border-collapse:collapse;margin:4px 0;font-size:12px}.fl-pop td,.fl-pop th{padding:1px 6px;text-align:right;white-space:nowrap}.fl-pop td:first-child,.fl-pop th:first-child{text-align:left}.fl-pop th{font-weight:500;color:#6b7f79;font-size:10.5px}
