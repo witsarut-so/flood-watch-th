@@ -38,7 +38,7 @@ function paintEvidence(){
  for(const [k,layer] of Object.entries(evidenceLayers)){layer.clearLayers();const on=$('f-'+k)?.checked;if(on)layer.addTo(map);else map.removeLayer(layer);}
  for(const i of evidenceData.items){
   if(i.subkind==='bma-canal')continue;  // Bangkok canals: forecast-layers.js (coloured canal stretches)
-  const k=kindOf(i);if(!visible(i,k)||(k==='bmareport'&&i.expired))continue;counts[k]=(counts[k]||0)+1;
+  const k=kindOf(i);if(!visible(i,k)||i.expired)continue;  // expired: old BMA district report or road sensor that stopped reportingcounts[k]=(counts[k]||0)+1;
   // mentioned places: drawn lines/points for every visible item that resolved one
   if($('f-mentions').checked&&$('f-'+k)?.checked)for(const g of i.geo||[]){if(!g.drawn)continue;
    if(g.lines.length){L.polyline(g.lines,{renderer:mentionRenderer,color:'#fff',weight:8,opacity:.8,interactive:false}).addTo(evidenceLayers.mentions);L.polyline(g.lines,{renderer:mentionRenderer,color:MENTION,weight:4,opacity:.95,interactive:false}).addTo(evidenceLayers.mentions);}
@@ -90,8 +90,8 @@ function paintRain(){
 function renderSituation(){
  const d=evidenceData;
  $('ev-status').textContent=`อัปเดต ${thaiTime(d.fetchedAt)} (${ago(d.fetchedAt)}) • ข่าว/โซเชียลย้อนหลัง ${d.windowHours.news} ชม. • รายงานประชาชน ${d.windowHours.citizen} ชม.`+(d.errors.length?` • บางแหล่งดึงไม่สำเร็จ: ${[...new Set(d.errors.map(e=>e.source.split(':')[0]))].join(', ')}`:'');
- const br=d.items.filter(i=>i.subkind==='bma-road'),rr=d.items.filter(i=>i.subkind==='bma-report'&&!i.expired),rx=d.items.filter(i=>i.subkind==='bma-report'&&i.expired).length;
- if(br.length||rr.length)$('ev-status').textContent+=` • กทม.: จุดวัดพบน้ำ ${br.length} ถนน, รายงานเขต ${rr.length} จุด (จุดวัด ${br[0]?thaiTime(br[0].at):'–'}${rr[0]?`, รายงานเขต ${thaiTime(rr[0].at)}`:''})${rx?` • ไม่แสดงรายงานเขตเก่าเกิน 12 ชม. ${rx} จุด`:''}`;else if(d.sources?.bmaAlert&&!d.sources.bmaAlert.ok)$('ev-status').textContent+=' • ดึงข้อมูลเตือนภัย กทม. ไม่สำเร็จ';
+ const br=d.items.filter(i=>i.subkind==='bma-road'&&!i.expired),bx=d.items.filter(i=>i.subkind==='bma-road'&&i.expired).length,rr=d.items.filter(i=>i.subkind==='bma-report'&&!i.expired),rx=d.items.filter(i=>i.subkind==='bma-report'&&i.expired).length;
+ if(br.length||rr.length)$('ev-status').textContent+=` • กทม.: จุดวัดพบน้ำ ${br.length} ถนน, รายงานเขต ${rr.length} จุด (จุดวัด ${br[0]?thaiTime(br[0].at):'–'}${rr[0]?`, รายงานเขต ${thaiTime(rr[0].at)}`:''})${rx?` • ไม่แสดงรายงานเขตเก่าเกิน 12 ชม. ${rx} จุด`:''}${bx?` • ไม่แสดงจุดวัดที่หยุดส่งข้อมูลเกิน 12 ชม. ${bx} จุด`:''}`;else if(d.sources?.bmaAlert&&!d.sources.bmaAlert.ok)$('ev-status').textContent+=' • ดึงข้อมูลเตือนภัย กทม. ไม่สำเร็จ';
  $('live-status').innerHTML=`<i></i> อัปเดต ${esc(ago(d.fetchedAt))}`;$('footer-updated').textContent=`• ข้อมูลล่าสุด ${thaiTime(d.fetchedAt)}`;
  const tbody=$('ev-provinces');tbody.replaceChildren();
  for(const p of d.provinces.slice(0,20)){const tr=document.createElement('tr');

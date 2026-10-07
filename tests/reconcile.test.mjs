@@ -7,11 +7,11 @@ const report=(at,extra={})=>({subkind:'bma-report',at,lat:13.8467,lng:100.5696,l
 const sensor=(at,cm)=>({kind:'sensor',at,lat:13.8467,lng:100.5696,depthCm:cm,title:'เซนเซอร์น้ำท่วมถนน ถ.งามวงศ์วาน ช่วงแยกเกษตร'});
 
 test('reports older than 12 h are expired',()=>{
- const items=[report('2026-09-26T10:43:00Z')];assert.deepEqual(reconcileReports(items,now),{expired:1,clipped:0});assert.equal(items[0].expired,true);});
+ const items=[report('2026-09-26T10:43:00Z')];assert.deepEqual(reconcileReports(items,now),{expired:1,clipped:0,expiredRoad:0});assert.equal(items[0].expired,true);});
 
 test('a newer dry sensor cuts the report line around it',()=>{
  const items=[report('2026-09-27T01:00:00Z'),sensor('2026-09-27T03:25:00Z',0)];
- assert.deepEqual(reconcileReports(items,now),{expired:0,clipped:1});const r=items[0];
+ assert.deepEqual(reconcileReports(items,now),{expired:0,clipped:1,expiredRoad:0});const r=items[0];
  assert.equal(r.lines.length,2);  // north and south pieces remain
  for(const l of r.lines)for(const q of l)assert.ok(Math.abs(q[0]-13.8467)*111.32>.29);
  assert.ok(Math.abs(r.lat-13.8467)*111.32>.29);assert.equal(r.dryNow.length,1);
@@ -19,4 +19,7 @@ test('a newer dry sensor cuts the report line around it',()=>{
 
 test('wet or older sensors leave the report alone',()=>{
  const items=[report('2026-09-27T01:00:00Z'),sensor('2026-09-27T03:25:00Z',20),sensor('2026-09-27T00:30:00Z',0)];
- assert.deepEqual(reconcileReports(items,now),{expired:0,clipped:0});assert.equal(items[0].lines[0].length,3);});
+ assert.deepEqual(reconcileReports(items,now),{expired:0,clipped:0,expiredRoad:0});assert.equal(items[0].lines[0].length,3);});
+test('road sensors that stopped reporting over 12 h ago are expired',()=>{
+ const items=[{subkind:'bma-road',at:'2026-09-26T10:00:00Z'},{subkind:'bma-road',at:'2026-09-27T03:30:00Z'}];
+ assert.deepEqual(reconcileReports(items,now),{expired:0,clipped:0,expiredRoad:1});assert.equal(items[0].expired,true);assert.equal(items[1].expired,undefined);});

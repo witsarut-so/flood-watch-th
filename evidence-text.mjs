@@ -97,11 +97,16 @@ const DAM=/เขื่อนเจ้าพระยา|ท้ายเขื�
 export function extractDamRelease(text){
  const out=[],seen=new Set();
  for(const m of text.matchAll(DAM)){
+  // bare "ท้ายเขื่อน" only counts when the dam named last before it is the Chao Phraya Dam (not แม่กลอง, ป่าสัก, …)
+  if(!m[0].endsWith('เจ้าพระยา')){const before=[...text.slice(Math.max(0,m.index-150),m.index).matchAll(/เขื่อน([^\s\d"“”'(),.]+)/g)].pop();if(!before||!before[1].startsWith('เจ้าพระยา'))continue;}
   const win=text.slice(m.index,m.index+160);
-  const from=win.match(/จาก\s*(\d[\d,]*)\s*(?:ลบ\.ม\.|ลูกบาศก์เมตร)?[^\d]{0,12}?เป็น\s*(\d[\d,]*)/);
+  const from=win.match(/จาก\s*(\d[\d,]*)\s*(?:ลบ\.ม\.|ลูกบาศก์เมตร)?[^\d]{0,30}?(?:เป็น|เหลือ)\s*(\d[\d,]*)/);
   const cands=from?[[from[2],'actual',from[0]]]:[...win.matchAll(/((?:ไม่เกิน|ไม่ให้เกิน|สูงสุด|จะ|คาดว่า|คาดการณ์|เตรียม|อาจ|ปรับ(?:เพิ่ม)?(?:การระบาย)?(?:น้ำ)?เป็น|เพิ่ม(?:การระบาย)?(?:น้ำ)?เป็น|ระบาย(?:น้ำ)?|เขื่อนเจ้าพระยา)[^\d\n]{0,25}?)(\d[\d,]*)(?:\s*[-–]\s*(\d[\d,]*))?\s*(?:ลบ\.ม\.|ลูกบาศก์เมตร)/g)].map(x=>{
-   const lead=x[1],v=x[3]||x[2];const type=/ไม่เกิน|ไม่ให้เกิน|สูงสุด/.test(lead)?'cap':(/จะ|คาดว่า|คาดการณ์|เตรียม|อาจ/.test(lead)||x[3])?'plan':'actual';return [v,type,x[0]];});
-  for(const [v,type,phrase] of cands){const n=Number(String(v).replace(/,/g,''));if(!(n>=100&&n<=6000))continue;const k=n+type;if(seen.has(k))continue;seen.add(k);out.push({m3s:n,type,phrase:phrase.trim().slice(0,90)});}
+   const lead=x[1],v=x[3]||x[2];
+   // "จาก 1,700" is an old figure being compared, "เกิน 2,000" a threshold — neither is the release now
+   if(/จาก\s*$/.test(lead)||(/เกิน\s*$/.test(lead)&&!/ไม่(?:ให้)?เกิน\s*$/.test(lead)))return null;
+   const type=/ไม่เกิน|ไม่ให้เกิน|สูงสุด/.test(lead)?'cap':(/จะ|คาดว่า|คาดการณ์|เตรียม|อาจ/.test(lead)||x[3])?'plan':'actual';return [v,type,x[0]];});
+  for(const [v,type,phrase] of cands.filter(Boolean)){const n=Number(String(v).replace(/,/g,''));if(!(n>=100&&n<=6000))continue;const k=n+type;if(seen.has(k))continue;seen.add(k);out.push({m3s:n,type,phrase:phrase.trim().slice(0,90)});}
  }
  return out;
 }

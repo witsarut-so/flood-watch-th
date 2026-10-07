@@ -198,11 +198,13 @@ async function bmaWithFallback(g,idx,errors){
  catch(e){try{const last=JSON.parse(await readFile(BMA_CACHE));errors.push({source:'bmaAlert',error:`${e.message} (เว็บ กทม. เข้าได้จากเครือข่ายในไทยเท่านั้น) • ใช้ข้อมูลที่ดึงสำเร็จล่าสุดเมื่อ ${last.fetchedAt}`});return last.items.map(i=>({...i,stale:true,fetchedAt:last.fetchedAt}));}catch{throw e;}}
 }
 // District reports are a snapshot typed up by district staff (often hours old); road sensors are live.
-// A report older than REPORT_MAX_H is kept in the list but marked expired (not drawn, not used by the model), and
+// A report older than REPORT_MAX_H is kept in the list but marked expired (not drawn, not used by the model), so is a
+// road sensor whose last reading is that old (the sensor stopped reporting: its last depth is not the depth now), and
 // report lines are cut within DRY_CLIP_KM of any road sensor that read 0 cm after the report was made.
 const REPORT_MAX_H=12,DRY_CLIP_KM=.3;
 export function reconcileReports(items,now=Date.now()){
- const dry=items.filter(i=>i.kind==='sensor'&&!i.subkind&&i.depthCm===0&&Number.isFinite(i.lat));let expired=0,clipped=0;
+ const dry=items.filter(i=>i.kind==='sensor'&&!i.subkind&&i.depthCm===0&&Number.isFinite(i.lat));let expired=0,clipped=0,expiredRoad=0;
+ for(const r of items)if(r.subkind==='bma-road'&&!(now-Date.parse(r.at)<=REPORT_MAX_H*3600000)){r.expired=true;expiredRoad++;}
  for(const r of items){if(r.subkind!=='bma-report')continue;const t=Date.parse(r.at);
   if(!(now-t<=REPORT_MAX_H*3600000)){r.expired=true;expired++;continue;}
   const newer=dry.filter(s=>Date.parse(s.at)>t);if(!newer.length)continue;
@@ -210,7 +212,7 @@ export function reconcileReports(items,now=Date.now()){
   if(!hit.length)continue;
   r.lines=keepRuns(densify(r.lines||[]),q=>!near(q)).map(l=>thinLine(l));r.dryNow=hit.map(s=>({title:s.title,at:s.at}));clipped++;
   if(Number.isFinite(r.lat)&&near([r.lat,r.lng])){const q=r.lines[0]?.[Math.floor(r.lines[0].length/2)];r.lat=q?.[0]??null;r.lng=q?.[1]??null;}}  // marker off the dry spot
- return {expired,clipped};}
+ return {expired,clipped,expiredRoad};}
 
 export async function bmaFloodAlert(g,idx){
  const html=await get(BMA_ALERT,'text',30000),text=html.replace(/<[^>]+>/g,' ').replace(/\s+/g,' '),repStamp=thaiStamp(text),at=sensorStamp(text)||repStamp;
@@ -262,7 +264,8 @@ const MEDIA_FEED=new URL('./data/evidence/social-feed.json.gz',import.meta.url);
 const PLATFORM={instagram:'Instagram',tiktok:'TikTok'};
 export async function mediaFeed(g,idx){
  let feed;try{feed=JSON.parse(gunzipSync(await readFile(MEDIA_FEED)));}catch{return [];}
- return (feed.items||[]).map(x=>{const text=redact(x.text||''),places=extractPlacesSocial(text,g),depth=extractDepth(text)[0];
+ // same window as Bluesky: the feed is only refreshed while flood-social-feed runs, so old posts must not look current
+ return (feed.items||[]).filter(x=>Date.now()-Date.parse(x.postedAt)<=HOURS*3600000).map(x=>{const text=redact(x.text||''),places=extractPlacesSocial(text,g),depth=extractDepth(text)[0];
   return {id:'media:'+x.id,kind:'social',subkind:'media',source:`${PLATFORM[x.platform]||x.platform} @${x.handle} (${x.outlet})`,sourceUrl:x.url,at:x.postedAt,title:text.slice(0,200),
    places,precision:places[0]?.precision||null,lat:places[0]?.lat??null,lng:places[0]?.lng??null,province:places[0]?.province??null,depthCm:depth?.cm??null,depthEstimated:depth?.estimated??null,facts:extractFacts(text),
    geo:matchNamed(text,idx,{places,bareScan:true}),damRelease:extractDamRelease(text),collectedFor:feed.window};});

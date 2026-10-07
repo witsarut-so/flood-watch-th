@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {parseRss,relevance,extractDepth,extractFacts,extractPlaces,extractPlacesSocial,buildGazetteer,redact,titleKey} from '../evidence-text.mjs';
+import {parseRss,relevance,extractDepth,extractFacts,extractPlaces,extractPlacesSocial,buildGazetteer,redact,titleKey,extractDamRelease} from '../evidence-text.mjs';
 const g=buildGazetteer([
  {id:1,level:4,short:'กรุงเทพฯ',en:'Bangkok',province:'กรุงเทพฯ',lat:13.75,lng:100.5,name:'กรุงเทพมหานคร'},
  {id:2,level:4,short:'นนทบุรี',en:'Nonthaburi',province:'นนทบุรี',lat:13.86,lng:100.51,name:'จังหวัดนนทบุรี'},
@@ -43,3 +43,11 @@ test('social posts: body places beat generic hashtags; unique long district name
  assert.equal(extractPlacesSocial('ฝนตกหนักมาก #น้ำท่วมกทม',g)[0].short,'กรุงเทพฯ');
 });
 test('a road named after a province is not that province',()=>{assert.ok(!extractPlaces('น้ำท่วม ถ.เพชรบุรี และ ถนนนนทบุรี',buildGazetteer([{id:1,level:4,short:'นนทบุรี',en:'',province:'นนทบุรี',lat:13.8,lng:100.5,name:'จังหวัดนนทบุรี'}])).length);});
+test('dam release: Chao Phraya figures only, not other dams, old figures or thresholds',()=>{
+ assert.deepEqual(extractDamRelease('จับตาด่วน! เขื่อนแม่กลอง ถึงเกณฑ์เฝ้าระวัง ระบายน้ำท้ายเขื่อน 972 ลบ.ม./วินาที'),[]);
+ assert.deepEqual(extractDamRelease('ปล่อยน้ำเขื่อนเจ้าพระยา จาก 1,700 ลูกบาศก์เมตร ต่อวินาที'),[]);
+ assert.deepEqual(extractDamRelease('เขื่อนเจ้าพระยา ระบายเกิน 2,000 ลบ.ม./วินาที กทม. เสี่ยง'),[]);
+ assert.deepEqual(extractDamRelease('กรมชลฯ ลดการระบายน้ำท้ายเขื่อนเจ้าพระยา เป็น 2,400 ลบ.ม./วินาที').map(r=>[r.m3s,r.type]),[[2400,'actual']]);
+ assert.deepEqual(extractDamRelease('เขื่อนเจ้าพระยา ปรับลดจาก 2,500 ลบ.ม./วินาที ทยอยลดจนเหลือ 2,400 ลบ.ม./วินาที').map(r=>[r.m3s,r.type]),[[2400,'actual']]);
+ assert.deepEqual(extractDamRelease('เขื่อนเจ้าพระยา ระบายน้ำไม่เกิน 2,700 ลบ.ม./วินาที').map(r=>[r.m3s,r.type]),[[2700,'cap']]);
+});
