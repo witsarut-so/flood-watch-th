@@ -15,6 +15,7 @@ const UA={'User-Agent':'Mozilla/5.0 (thai-flood-watch prototype)'};
 export const HORIZONS=[12,24,36];
 const HIST_H=240,AHEAD=36,BOX=[98.4,12.4,102.6,16.6],MIN_PCT=60,MAX_STATIONS=170,HINDCAST=36;
 const PLANS=new URL('./forecast-plans.json',import.meta.url);
+const ALWAYS_PROV=/^(กรุงเทพมหานคร|นนทบุรี|ปทุมธานี|พระนครศรีอยุธยา|สมุทรปราการ|นครปฐม)$/;
 
 async function get(url,timeout=30000){const r=await fetch(url,{headers:UA,signal:AbortSignal.timeout(timeout)});if(!r.ok)throw Error(`HTTP ${r.status} ${new URL(url).host}`);return r.json();}
 async function mapLimit(items,limit,fn){const out=new Array(items.length);let next=0;await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{while(next<items.length){const i=next++;try{out[i]=await fn(items[i]);}catch{out[i]=null;}}}));return out;}
@@ -204,8 +205,10 @@ async function stations(g){
   return {id:s.id,code:s.tele_station_oldcode||String(s.id),name:s.tele_station_name?.th||'',lat,lng,basin:r.basin?.basin_name?.th||'',agency:r.agency?.agency_shortname?.th||'',province:r.geocode?.province_name?.th||'',amphoe:r.geocode?.amphoe_name?.th||'',tambon:r.geocode?.tumbon_name?.th||'',
    levelNow:wl,pctNow:pct,qNow:num(r.discharge),bank,ground,at:Number.isFinite(t)?new Date(t).toISOString():null,fresh:Number.isFinite(t)&&now-t<6*3600000};})
   .filter(s=>s.lat!==null&&s.lng>=BOX[0]&&s.lng<=BOX[2]&&s.lat>=BOX[1]&&s.lat<=BOX[3]&&s.fresh&&s.bank!==null&&s.ground!==null&&s.bank>s.ground&&s.pctNow!==null);
- const must=new Set([...Object.keys(FLOW),'C.12','CPY015','CPY014','BKC002']);
- const chosen=pick.filter(s=>must.has(s.code)||s.pctNow>=MIN_PCT).sort((a,b)=>(must.has(b.code)-must.has(a.code))||b.pctNow-a.pctNow).slice(0,MAX_STATIONS);
+ // always kept: the routed chain and every station in the central flood-model provinces (few, and the ones people
+ // there look for, e.g. the Pathum Thani / Nonthaburi canals), whatever their level; elsewhere only fuller rivers
+ const must=new Set([...Object.keys(FLOW),'C.12','CPY015','CPY014','BKC002']),keep=s=>must.has(s.code)||ALWAYS_PROV.test(s.province);
+ const chosen=pick.filter(s=>keep(s)||s.pctNow>=MIN_PCT).sort((a,b)=>(keep(b)-keep(a))||b.pctNow-a.pctNow).slice(0,MAX_STATIONS);
  const start=new Date((g.base)*3600000+7*3600000).toISOString().slice(0,10),end=new Date(Date.now()+7*3600000+86400000).toISOString().slice(0,10);
  const hist=await mapLimit(chosen,6,s=>get(`${TW}waterlevel_graph?station_type=tele_waterlevel&station_id=${s.id}&start_date=${start}&end_date=${end}`));
  return chosen.map((s,i)=>{const gd=hist[i]?.data?.graph_data;if(!gd)return null;return {...s,lvl:toSeries(g,gd,'value'),q:gd.some(p=>num(p.discharge)!==null)?toSeries(g,gd,'discharge'):null};}).filter(Boolean);
