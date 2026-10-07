@@ -1,5 +1,5 @@
 {
- "note": "Dam release plans announced by RID / ONWR (from news), used as the future inflow of the river forecast. Times are Asia/Bangkok. Update when a new announcement comes out. A plan step already in the past is replaced by the measured discharge when the gauge below the dam disagrees.",
+ "note": "Dam release plans announced by RID / ONWR (from news), used as the future inflow of the river forecast. Times are Asia/Bangkok. forecast.mjs (autoPlans) keeps these current between edits: measured daily release from ThaiWater for storage dams, Chao Phraya figures that two news outlets agree on (dated when they take effect), and a renewed high scenario once its date has passed. Edit by hand for announcements; a newer hand-made step wins. A plan step already in the past is replaced by the measured discharge when the gauge below the dam disagrees.",
  "updatedAt": "2026-10-07T20:30:00+07:00",
  "dams": [
   {

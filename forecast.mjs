@@ -72,6 +72,50 @@ const lastIdx=(a,upto)=>{for(let i=upto;i>=0;i--)if(a[i]!==null)return i;return 
 // Tidal = low-lying station near the coast whose level swings > 35 cm within two days (a flashy hill river also swings).
 function tidal(lvl,end,st){if(!(st.lat<14.3&&st.bank<6))return false;const w=lvl.slice(Math.max(0,end-48),end+1).filter(v=>v!==null);if(w.length<30)return false;return Math.max(...w)-Math.min(...w)>.35;}
 
+// forecast-plans.json is edited by hand when RID announces a plan; between edits the plans are kept current here, every
+// run, from data already fetched (added steps carry auto:true and say where they came from; a newer hand-made step wins):
+//  - storage dams in the ThaiWater table (Pa Sak): the measured daily release, when it differs from the plan by ≥ 5 %;
+//  - Chao Phraya Dam (a barrage, not in that table): a release figure from the news, once two outlets report it within 12 h;
+//  - a high scenario whose date has passed: back to the highest release of the last 10 days at the gauge below the dam
+//    (at least +10 %) within 24 h — labelled as an assumption;
+//  - the latest news headlines about each dam (outlook text stays hand-written and shows its date).
+const AUTO_MIN_CHANGE=.05,NEWS_AGREE_H=12,DAM_NEWS=48,DAM_WORDS={chaophraya:/เขื่อนเจ้าพระยา|ท้ายเขื่อนเจ้าพระยา/,pasak:/ป่าสัก/};
+const bkkDay=d=>Date.parse(d+'T00:00:00+07:00'),changed=(a,b)=>Math.abs(a-b)>=Math.max(10,b*AUTO_MIN_CHANGE);
+const round50=v=>Math.ceil(v/50)*50;
+// Release steps from news that two different outlets agree on (same figure, reported within 12 h of each other):
+// the latest agreed figure (dated when it takes effect if the articles say so, else at the first report) and any agreed
+// step announced for later ("2,350 ใน 5 ทุ่มคืนนี้"). Plain plans/ranges ("คาดว่า 2,600-2,800") are not steps.
+export function newsSteps(points,now=Date.now()){
+ const pts=(points||[]).filter(p=>Number.isFinite(p.m3s)&&(p.type==='actual'||(p.type==='plan'&&p.effectiveAt&&!/\d\s*[-–]\s*\d/.test(p.phrase||''))))
+  .map(p=>({...p,t:Date.parse(p.at),e:p.effectiveAt?Date.parse(p.effectiveAt):null})).filter(p=>Number.isFinite(p.t)).sort((a,b)=>a.t-b.t);
+ const ok=pts.filter(p=>pts.some(o=>o!==p&&o.m3s===p.m3s&&o.source!==p.source&&Math.abs(o.t-p.t)<=NEWS_AGREE_H*3600000));
+ const step=run=>{const e=run.map(p=>p.e).filter(Number.isFinite);return {m3s:run[0].m3s,from:e.length?Math.min(...e):run[0].t,first:run[0],sources:[...new Set(run.map(p=>p.source))]};};
+ const out=[],nowOk=ok.filter(p=>!(p.e>now));
+ if(nowOk.length){const v=nowOk.at(-1).m3s;let k=nowOk.length-1;while(k>0&&nowOk[k-1].m3s===v)k--;out.push(step(nowOk.slice(k)));}
+ const later=new Map();for(const p of ok)if(p.e>now){const k=p.m3s+'@'+Math.round(p.e/3600000);if(!later.has(k))later.set(k,[]);later.get(k).push(p);}
+ for(const run of later.values())out.push(step(run));
+ return out.sort((a,b)=>a.from-b.from);
+}
+export function autoPlans(plans,{dams=[],evidence=null,gauges={},now=Date.now()}={}){
+ const news=(evidence?.items||[]).filter(i=>i.kind==='news'&&now-Date.parse(i.at)<=DAM_NEWS*3600000).sort((a,b)=>Date.parse(b.at)-Date.parse(a.at));
+ const out={...plans,outlookAt:plans.updatedAt,dams:plans.dams.map(dam=>{
+  const d={...dam,schedule:dam.schedule.map(s=>({...s}))},sched=d.schedule,cur=()=>sched.filter(s=>Date.parse(s.from)<=now).sort((a,b)=>Date.parse(a.from)-Date.parse(b.from)).at(-1)||sched[0];
+  const before=t=>sched.filter(s=>Date.parse(s.from)<=t).sort((a,b)=>Date.parse(a.from)-Date.parse(b.from)).at(-1)||sched[0];
+  const add=s=>{if(s.from<=Date.parse(cur().from)||s.from>now+48*3600000||sched.some(x=>Math.abs(Date.parse(x.from)-s.from)<3*3600000)||(s.measured?!changed(s.m3s,before(s.from).m3s):s.m3s===before(s.from).m3s))return;
+   sched.push({from:new Date(s.from).toISOString(),m3s:s.m3s,source:s.source,url:s.url,auto:true});sched.sort((a,b)=>Date.parse(a.from)-Date.parse(b.from));};
+  const word=DAM_WORDS[d.id]||new RegExp(d.name.split(' ')[0].replace('เขื่อน',''));
+  const row=dams.find(x=>word.test(x.name));
+  if(row&&Number.isFinite(row.releaseM3s)&&row.date)add({from:bkkDay(row.date),m3s:row.releaseM3s,measured:true,source:`อัตโนมัติ: ระบายจริงเฉลี่ยวันที่ ${row.date} (กรมชลประทาน ผ่าน ThaiWater) • เก็บกัก ${row.storagePct}%`,url:'https://www.thaiwater.net/water/dam/large'});
+  else if(d.id==='chaophraya')for(const c of newsSteps(evidence?.damRelease?.points,now)){
+   add({from:c.from,m3s:c.m3s,source:`อัตโนมัติจากข่าว: "${c.first.phrase}" • ${c.sources.slice(0,3).join(', ')}${c.sources.length>3?` และอีก ${c.sources.length-3} แหล่ง`:''}`,url:c.first.url});}
+  const gq=gauges[d.station];
+  if(gq&&Number.isFinite(gq.now)&&(!d.high||Date.parse(d.high.by)<now)){const m=Math.max(round50(gq.max10d||0),round50(gq.now*1.1));
+   d.high={m3s:m,by:new Date(now+24*3600000).toISOString(),auto:true,why:`สมมติฐานสูง (อัตโนมัติ): ระบายเพิ่มเป็น ${m.toLocaleString('en-US')} ลบ.ม./วินาที ภายใน 24 ชม. (สูงสุด 10 วันที่ ${d.station} ${Math.round(gq.max10d).toLocaleString('en-US')} หรือ +10% จากตอนนี้) — ไม่ใช่ประกาศ`};}
+  d.news=news.filter(i=>word.test(i.title)).filter((i,k,a)=>a.findIndex(o=>o.title===i.title)===k).slice(0,3).map(i=>({at:i.at,title:i.title,source:i.source,url:i.sourceUrl}));
+  return d;})};
+ return out;
+}
+
 // Dam release plan → hourly release (m3/s).
 function planSeries(g,dam,scenario){
  const pts=[...dam.schedule].map(p=>({t:Date.parse(p.from),m3s:p.m3s})).sort((a,b)=>a.t-b.t),a=new Array(g.N).fill(null);
@@ -185,10 +229,12 @@ async function rainOutlook(){
 // --- job ----------------------------------------------------------------------------------------------------------
 export async function buildForecast({evidence}={}){
  const now=Date.now(),g=grid(now),errors=[];
- const plans=JSON.parse(await readFile(PLANS,'utf8'));
+ const manual=JSON.parse(await readFile(PLANS,'utf8'));
  const [stR,damR,rainR]=await Promise.allSettled([stations(g),dams(),rainOutlook()]);
  if(stR.status==='rejected')throw Error('ThaiWater water levels: '+stR.reason.message);
  const sts=stR.value;if(damR.status==='rejected')errors.push({source:'dams',error:damR.reason.message});if(rainR.status==='rejected')errors.push({source:'rain',error:rainR.reason.message});
+ const gauges={};for(const d of manual.dams){const s=d.station&&sts.find(x=>x.code===d.station),q=s?.q?.slice(0,g.NOW+1).filter(v=>v!==null);if(q?.length)gauges[d.station]={now:q.at(-1),max10d:Math.max(...q)};}
+ const plans=autoPlans(manual,{dams:damR.status==='fulfilled'?damR.value:[],evidence,gauges,now});
  const byCode=new Map(sts.map(s=>[s.code,s])),order=[...Object.keys(FLOW).filter(c=>byCode.has(c)),...sts.map(s=>s.code).filter(c=>!FLOW[c])];
  const run=(scenario,end,hind)=>{const flows={meta:{}},res=new Map();
   for(const c of order){const st=byCode.get(c),f=forecastStation(st,g,end,flows,plans,scenario,hind);if(!f)continue;res.set(c,f);

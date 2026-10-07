@@ -93,6 +93,28 @@ export const titleKey=t=>t.toLowerCase().replace(/[\s"'“”‘’!?,.:;()\-–
 //  cap     "ไม่เกิน 2,000", "คุมไม่ให้เกิน"
 //  plan    "จะ/คาดว่า/เตรียม/อาจ … 2,400", or a range (2,000-2,500)
 // Only numbers within ~80 characters after a mention of the dam are read; plausible range 100-6,000 m3/s.
+// A time said right after the figure ("ตั้งแต่ 13.00 น.", "5 ทุ่มคืนนี้", "บ่ายโมง", "พรุ่งนี้", "วันที่ 8 ต.ค.") is kept as
+// `when` so the step can be dated when it takes effect rather than when the article was published (see effectiveAt).
+const TH_NUM={'หนึ่ง':1,'สอง':2,'สาม':3,'สี่':4,'ห้า':5},TH_MON=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+export function releaseWhen(after){
+ const s=after.slice(0,60).split(/ลบ\.ม\.|ลูกบาศก์เมตร/).slice(0,2).join(' ');  // stop at the next figure
+ let h=null,m=0,x;
+ if((x=s.match(/(\d{1,2})[.:](\d{2})\s*น/))){h=+x[1];m=+x[2];}
+ else if((x=s.match(/(\d|หนึ่ง|สอง|สาม|สี่|ห้า)\s*ทุ่ม/)))h=18+(+x[1]||TH_NUM[x[1]]);
+ else if(/เที่ยงคืน|หกทุ่ม|6\s*ทุ่ม/.test(s))h=24;
+ else if((x=s.match(/บ่าย\s*(\d|สอง|สาม|สี่|ห้า)?\s*โมง/)))h=12+(x[1]?(+x[1]||TH_NUM[x[1]]):1);
+ else if(/เที่ยง/.test(s))h=12;
+ if(h===null||h>24||m>59)return null;
+ const d=s.match(/วันที่\s*(\d{1,2})\s*(ม\.ค\.|ก\.พ\.|มี\.ค\.|เม\.ย\.|พ\.ค\.|มิ\.ย\.|ก\.ค\.|ส\.ค\.|ก\.ย\.|ต\.ค\.|พ\.ย\.|ธ\.ค\.)/);
+ return {h,m,...(d?{day:+d[1],month:TH_MON.indexOf(d[2])+1}:/พรุ่งนี้/.test(s)?{dayOffset:1}:{})};
+}
+// When a release step takes effect, from the article time (ISO) and releaseWhen() — Asia/Bangkok.
+export function effectiveAt(articleAt,w){
+ if(!w)return null;const a=new Date(Date.parse(articleAt)+7*3600000);
+ let y=a.getUTCFullYear(),mo=a.getUTCMonth()+1,d=a.getUTCDate()+(w.dayOffset||0);
+ if(w.day){d=w.day;if(w.month)mo=w.month;}
+ const t=Date.UTC(y,mo-1,d,w.h,w.m)-7*3600000;return Number.isFinite(t)?new Date(t).toISOString():null;
+}
 const DAM=/เขื่อนเจ้าพระยา|ท้ายเขื่อน(?:เจ้าพระยา)?/g;
 export function extractDamRelease(text){
  const out=[],seen=new Set();
@@ -101,12 +123,13 @@ export function extractDamRelease(text){
   if(!m[0].endsWith('เจ้าพระยา')){const before=[...text.slice(Math.max(0,m.index-150),m.index).matchAll(/เขื่อน([^\s\d"“”'(),.]+)/g)].pop();if(!before||!before[1].startsWith('เจ้าพระยา'))continue;}
   const win=text.slice(m.index,m.index+160);
   const from=win.match(/จาก\s*(\d[\d,]*)\s*(?:ลบ\.ม\.|ลูกบาศก์เมตร)?[^\d]{0,30}?(?:เป็น|เหลือ)\s*(\d[\d,]*)/);
-  const cands=from?[[from[2],'actual',from[0]]]:[...win.matchAll(/((?:ไม่เกิน|ไม่ให้เกิน|สูงสุด|จะ|คาดว่า|คาดการณ์|เตรียม|อาจ|ปรับ(?:เพิ่ม)?(?:การระบาย)?(?:น้ำ)?เป็น|เพิ่ม(?:การระบาย)?(?:น้ำ)?เป็น|ระบาย(?:น้ำ)?|เขื่อนเจ้าพระยา)[^\d\n]{0,25}?)(\d[\d,]*)(?:\s*[-–]\s*(\d[\d,]*))?\s*(?:ลบ\.ม\.|ลูกบาศก์เมตร)/g)].map(x=>{
+  const cands=from?[[from[2],'actual',from[0],win.slice(from.index+from[0].length)]]:[...win.matchAll(/((?:ไม่เกิน|ไม่ให้เกิน|สูงสุด|จะ|คาดว่า|คาดการณ์|เตรียม|อาจ|ปรับ(?:เพิ่ม)?(?:การระบาย)?(?:น้ำ)?เป็น|เพิ่ม(?:การระบาย)?(?:น้ำ)?เป็น|ระบาย(?:น้ำ)?|เขื่อนเจ้าพระยา)[^\d\n]{0,25}?)(\d[\d,]*)(?:\s*[-–]\s*(\d[\d,]*))?\s*(?:ลบ\.ม\.|ลูกบาศก์เมตร)/g)].map(x=>{
    const lead=x[1],v=x[3]||x[2];
    // "จาก 1,700" is an old figure being compared, "เกิน 2,000" a threshold — neither is the release now
    if(/จาก\s*$/.test(lead)||(/เกิน\s*$/.test(lead)&&!/ไม่(?:ให้)?เกิน\s*$/.test(lead)))return null;
-   const type=/ไม่เกิน|ไม่ให้เกิน|สูงสุด/.test(lead)?'cap':(/จะ|คาดว่า|คาดการณ์|เตรียม|อาจ/.test(lead)||x[3])?'plan':'actual';return [v,type,x[0]];});
-  for(const [v,type,phrase] of cands.filter(Boolean)){const n=Number(String(v).replace(/,/g,''));if(!(n>=100&&n<=6000))continue;const k=n+type;if(seen.has(k))continue;seen.add(k);out.push({m3s:n,type,phrase:phrase.trim().slice(0,90)});}
+   const type=/ไม่เกิน|ไม่ให้เกิน|สูงสุด/.test(lead)?'cap':(/จะ|คาดว่า|คาดการณ์|เตรียม|อาจ/.test(lead)||x[3])?'plan':'actual';return [v,type,x[0],win.slice(x.index+x[0].length)];});
+  for(const [v,type,phrase,after] of cands.filter(Boolean)){const n=Number(String(v).replace(/,/g,''));if(!(n>=100&&n<=6000))continue;const k=n+type;if(seen.has(k))continue;seen.add(k);
+   const when=releaseWhen(text.slice(m.index+win.length-after.length,m.index+win.length-after.length+80));out.push({m3s:n,type,phrase:phrase.trim().slice(0,90),...(when?{when}:{})});}
  }
  return out;
 }

@@ -41,3 +41,5 @@
 .inund-table{min-width:460px}.inund-table td:nth-child(n+2){white-space:nowrap}.inund-table b.new{color:#d9480f}
 @media(max-width:1000px){.inund-grid{grid-template-columns:1fr}}
 .inund-table b.dam{color:#e00028}.inund-table th small{font-weight:400}
+.step.auto i{background:#2b8a3e}.step.auto small{color:#2b8a3e}
+.dam-news{margin:8px 0 0;padding-left:18px;font-size:13px}.dam-news li{margin:2px 0}.dam-news small{color:#71847f}

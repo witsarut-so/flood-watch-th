@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {routeFlow,trend,canalSummary} from '../forecast.mjs';
+import {routeFlow,trend,canalSummary,newsSteps,autoPlans} from '../forecast.mjs';
 
 test('a branch receives only its share of the upstream change, after the travel time', () => {
  const up=[1000,1000,1000,1000,1300,1300,1300,1300,1300,1300],q=[500,500,500,500,500,null,null,null,null,null];
@@ -22,4 +22,38 @@ test('canal summary ranks canals by worst live station', () => {
  const s=canalSummary({items:[mk('A1','คลองเอ','normal',-.3),mk('B1','คลองบี','critical',.4),mk('B2','คลองบี','offline',null,true),mk('C1','คลองซี','warning',-.05)]});
  assert.deepEqual(s.canals.map(c=>c.canal),['คลองบี','คลองซี','คลองเอ']);
  assert.equal(s.canals[0].critical,1);assert.equal(s.counts.offline,1);
+});
+
+const pt=(at,m3s,source)=>({at,m3s,source,type:'actual',phrase:`${m3s}`,url:'https://x.test/'+source});
+test('news release counts once two outlets agree; a lone figure is ignored; announced later steps are kept', () => {
+ const now=Date.parse('2026-10-07T12:00Z');
+ const [c]=newsSteps([pt('2026-10-06T00:00Z',2500,'A'),pt('2026-10-06T05:00Z',2500,'B'),pt('2026-10-07T01:00Z',2400,'C'),pt('2026-10-07T03:00Z',2400,'D'),pt('2026-10-07T09:00Z',1700,'E')],now);
+ assert.equal(c.m3s,2400);assert.equal(new Date(c.from).toISOString(),'2026-10-07T01:00:00.000Z');assert.deepEqual(c.sources,['C','D']);
+ assert.deepEqual(newsSteps([pt('2026-10-07T01:00Z',2400,'C'),pt('2026-10-07T03:00Z',2400,'C')],now),[]);  // same outlet twice
+ const at23={effectiveAt:'2026-10-07T16:00:00.000Z'};
+ const s=newsSteps([pt('2026-10-07T06:00Z',2400,'A'),pt('2026-10-07T07:00Z',2400,'B'),{...pt('2026-10-07T10:00Z',2350,'C'),...at23},{...pt('2026-10-07T11:00Z',2350,'D'),...at23},pt('2026-10-07T11:30Z',2400,'E')],now);
+ assert.deepEqual(s.map(x=>[x.m3s,new Date(x.from).toISOString()]),[['2400','2026-10-07T06:00:00.000Z'],['2350','2026-10-07T16:00:00.000Z']].map(([v,t])=>[+v,t]));
+});
+
+test('auto plans: measured dam release and agreed news add steps, a stale high scenario is renewed, newer hand steps win', () => {
+ const now=Date.parse('2026-10-08T12:00:00+07:00');
+ const plans={updatedAt:'2026-10-07T20:30:00+07:00',dams:[
+  {id:'chaophraya',name:'เขื่อนเจ้าพระยา (ชัยนาท)',station:'C.13',schedule:[{from:'2026-10-07T13:00:00+07:00',m3s:2400}],high:{m3s:2500,by:'2026-10-08T00:00:00+07:00',why:'old'}},
+  {id:'pasak',name:'เขื่อนป่าสักชลสิทธิ์ (ลพบุรี)',schedule:[{from:'2026-10-03T00:00:00+07:00',m3s:500}]}]};
+ const evidence={damRelease:{points:[pt('2026-10-08T01:00Z',2200,'A'),pt('2026-10-08T02:00Z',2200,'B')]},
+  items:[{kind:'news',at:'2026-10-08T03:00Z',title:'เขื่อนเจ้าพระยาลดระบายเหลือ 2,200',source:'A',sourceUrl:'u1'},{kind:'news',at:'2026-10-08T02:00Z',title:'ฝนตกหนักภาคใต้',source:'B',sourceUrl:'u2'}]};
+ const dams=[{name:'เขื่อนป่าสักชลสิทธิ์',date:'2026-10-08',releaseM3s:350,storagePct:104}];
+ const p=autoPlans(plans,{dams,evidence,gauges:{'C.13':{now:2210,max10d:2520}},now});
+ const cp=p.dams[0],ps=p.dams[1];
+ assert.deepEqual(cp.schedule.map(s=>[s.m3s,!!s.auto]),[[2400,false],[2200,true]]);
+ assert.equal(cp.high.m3s,2550);assert.ok(cp.high.auto);assert.equal(cp.news.length,1);
+ assert.deepEqual(ps.schedule.map(s=>[s.m3s,!!s.auto]),[[500,false],[350,true]]);
+ assert.equal(plans.dams[0].schedule.length,1);  // input untouched
+ // a hand-made step newer than the reports wins; a release within 5 % of the plan adds nothing
+ const q=autoPlans({...plans,dams:[{...plans.dams[0],schedule:[{from:'2026-10-08T10:00:00+07:00',m3s:2300}]},plans.dams[1]]},{dams:[{...dams[0],releaseM3s:510}],evidence,now});
+ assert.equal(q.dams[0].schedule.length,1);assert.equal(q.dams[1].schedule.length,1);
+ // an agreed step announced for tonight is added ahead of time
+ const ev2={damRelease:{points:[pt('2026-10-08T01:00Z',2400,'A'),pt('2026-10-08T02:00Z',2400,'B'),{...pt('2026-10-08T03:00Z',2350,'C'),effectiveAt:'2026-10-08T16:00:00.000Z'},{...pt('2026-10-08T04:00Z',2350,'D'),effectiveAt:'2026-10-08T16:00:00.000Z'}]},items:[]};
+ const f=autoPlans(plans,{evidence:ev2,now});
+ assert.deepEqual(f.dams[0].schedule.map(s=>[s.from,s.m3s]),[['2026-10-07T13:00:00+07:00',2400],['2026-10-08T16:00:00.000Z',2350]]);
 });

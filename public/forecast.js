@@ -2,6 +2,8 @@
 // chain with travel times, dam table, Bangkok canals and the rain outlook. Data: /live/forecast.json (forecast.mjs).
 const $=id=>document.getElementById(id),{esc,time,f2,sign}=FL;
 const num=v=>v==null?'–':Number(v).toLocaleString('th-TH');
+const day=t=>new Date(t).toLocaleDateString('th-TH',{timeZone:'Asia/Bangkok',day:'numeric',month:'short',year:'2-digit'});
+const ago=t=>{const m=Math.round((Date.now()-Date.parse(t))/60000);return m<60?`${Math.max(m,1)} นาทีก่อน`:m<2880?`${Math.round(m/60)} ชม.ก่อน`:`${Math.round(m/1440)} วันก่อน`;};
 let map=null,horizon=24,layers={};
 const CHAIN_CP=[['C.2','นครสวรรค์'],['C.13','ท้ายเขื่อนเจ้าพระยา'],['C.3','สิงห์บุรี'],['C.7A','อ่างทอง'],['C.35','อยุธยา (บ้านป้อม)'],['CPY012','บางปะอิน'],['CPY014','นนทบุรี (ปากเกร็ด)'],['C.12','กทม. สามเสน'],['CPY015','กทม. สะพานกรุงเทพ']];
 const CHAIN_PS=[['S.9','สระบุรี (บ้านป่า)'],['S.26','ท้ายเขื่อนพระราม 6'],['PAS008','ท่าเรือ'],['S.5','อยุธยา (สะพานปรีดี)']];
@@ -112,9 +114,9 @@ function riskList(d){
 
 function damPlans(d){
  $('dam-plans').innerHTML=d.plans.dams.map(p=>{const max=Math.max(...p.schedule.map(s=>s.m3s),p.high?.m3s||0);
-  return `<div class="dam-plan"><h3>${esc(p.name)}</h3><div class="steps">${p.schedule.map(s=>{const past=Date.parse(s.from)<=Date.now();return `<div class="step${past?' past':''}"><i style="height:${Math.max(6,s.m3s/max*64)}px"></i><b>${num(s.m3s)}</b><small>${new Date(s.from).toLocaleString('th-TH',{timeZone:'Asia/Bangkok',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</small></div>`;}).join('')}${p.high?`<div class="step high"><i style="height:${p.high.m3s/max*64}px"></i><b>${num(p.high.m3s)}?</b><small>สมมติฐานสูง</small></div>`:''}</div>
-   <p>${esc(p.outlook||'')}${p.high?`<br><small>${esc(p.high.why)}</small>`:''}</p><p class="fc-small">ที่มา: ${[...new Map(p.schedule.map(s=>[s.url,s])).values()].map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noreferrer">${esc(s.source)}</a>`).join(' • ')}</p></div>`;}).join('')
-  +(d.plans.tide?`<div class="dam-plan tide"><h3>น้ำทะเลหนุน</h3><p>${esc(d.plans.tide.note)}</p><p class="fc-small"><a href="${esc(d.plans.tide.url)}" target="_blank" rel="noreferrer">ที่มา</a> • สถานีริมเจ้าพระยาตอนล่างในแผนที่รวมน้ำขึ้นน้ำลงแล้ว</p></div>`:'');
+  return `<div class="dam-plan"><h3>${esc(p.name)}</h3><div class="steps">${p.schedule.map(s=>{const past=Date.parse(s.from)<=Date.now();return `<div class="step${past?' past':''}${s.auto?' auto':''}" title="${esc(s.source)}"><i style="height:${Math.max(6,s.m3s/max*64)}px"></i><b>${num(s.m3s)}</b><small>${new Date(s.from).toLocaleString('th-TH',{timeZone:'Asia/Bangkok',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}${s.auto?'<br>อัตโนมัติ':''}</small></div>`;}).join('')}${p.high?`<div class="step high"><i style="height:${p.high.m3s/max*64}px"></i><b>${num(p.high.m3s)}?</b><small>สมมติฐานสูง</small></div>`:''}</div>
+   <p>${esc(p.outlook||'')}${p.outlook&&d.plans.outlookAt?` <small>(ข้อความ ณ ${esc(day(d.plans.outlookAt))})</small>`:''}${p.high?`<br><small>${esc(p.high.why)}</small>`:''}</p>${p.news?.length?`<ul class="dam-news">${p.news.map(n=>`<li><a href="${esc(n.url)}" target="_blank" rel="noreferrer">${esc(n.title)}</a> <small>${esc(n.source)} • ${esc(ago(n.at))}</small></li>`).join('')}</ul>`:''}<p class="fc-small">ที่มา: ${[...new Map(p.schedule.map(s=>[s.url,s])).values()].map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noreferrer">${esc(s.source)}</a>`).join(' • ')}</p></div>`;}).join('')
+  +(d.plans.tide?`<div class="dam-plan tide"><h3>น้ำทะเลหนุน</h3><p>${esc(d.plans.tide.note)}${d.plans.outlookAt?` <small>(ข้อความ ณ ${esc(day(d.plans.outlookAt))})</small>`:''}</p><p class="fc-small"><a href="${esc(d.plans.tide.url)}" target="_blank" rel="noreferrer">ที่มา</a> • สถานีริมเจ้าพระยาตอนล่างในแผนที่รวมน้ำขึ้นน้ำลงแล้ว</p></div>`:'');
 }
 function spark(s){
  const pts=s.path,lv=pts.flatMap(p=>[p[1],p[2]]).filter(v=>v!=null),lo=Math.min(...lv,s.bankM)-.2,hi=Math.max(...lv,s.bankM)+.2,W=160,H=46,x=h=>(h+48)/84*W,y=v=>H-(v-lo)/(hi-lo)*H;

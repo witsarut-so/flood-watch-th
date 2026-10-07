@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {parseRss,relevance,extractDepth,extractFacts,extractPlaces,extractPlacesSocial,buildGazetteer,redact,titleKey,extractDamRelease} from '../evidence-text.mjs';
+import {parseRss,relevance,extractDepth,extractFacts,extractPlaces,extractPlacesSocial,buildGazetteer,redact,titleKey,extractDamRelease,effectiveAt} from '../evidence-text.mjs';
 const g=buildGazetteer([
  {id:1,level:4,short:'กรุงเทพฯ',en:'Bangkok',province:'กรุงเทพฯ',lat:13.75,lng:100.5,name:'กรุงเทพมหานคร'},
  {id:2,level:4,short:'นนทบุรี',en:'Nonthaburi',province:'นนทบุรี',lat:13.86,lng:100.51,name:'จังหวัดนนทบุรี'},
@@ -50,4 +50,12 @@ test('dam release: Chao Phraya figures only, not other dams, old figures or thre
  assert.deepEqual(extractDamRelease('กรมชลฯ ลดการระบายน้ำท้ายเขื่อนเจ้าพระยา เป็น 2,400 ลบ.ม./วินาที').map(r=>[r.m3s,r.type]),[[2400,'actual']]);
  assert.deepEqual(extractDamRelease('เขื่อนเจ้าพระยา ปรับลดจาก 2,500 ลบ.ม./วินาที ทยอยลดจนเหลือ 2,400 ลบ.ม./วินาที').map(r=>[r.m3s,r.type]),[[2400,'actual']]);
  assert.deepEqual(extractDamRelease('เขื่อนเจ้าพระยา ระบายน้ำไม่เกิน 2,700 ลบ.ม./วินาที').map(r=>[r.m3s,r.type]),[[2700,'cap']]);
+});
+test('dam release: when the step takes effect',()=>{
+ const at='2026-10-07T14:17:35Z',eff=t=>extractDamRelease(t).map(r=>effectiveAt(at,r.when));
+ assert.deepEqual(eff('เขื่อนเจ้าพระยา ปรับลดระบายน้ำ 2,350 ลบ.ม./วิ ใน 5 ทุ่ม คืนนี้'),['2026-10-07T16:00:00.000Z']);
+ assert.deepEqual(eff('ลดการระบายน้ำท้ายเขื่อนเจ้าพระยา เป็น 2,400 ลบ.ม./วินาที บ่ายโมง'),['2026-10-07T06:00:00.000Z']);
+ assert.deepEqual(eff('เขื่อนเจ้าพระยา จะปรับลดเหลือ 2,300 ลบ.ม./วินาที พรุ่งนี้ เวลา 06.00 น.'),['2026-10-07T23:00:00.000Z']);
+ assert.deepEqual(eff('ท้ายเขื่อนเจ้าพระยา ทยอยจาก 2,400 เป็น 2,500 ลบ.ม./วินาที ในวันที่ 2 ต.ค. เวลา 03.00 น.'),['2026-10-01T20:00:00.000Z']);
+ assert.deepEqual(eff('เขื่อนเจ้าพระยาระบาย 2,500 ลบ.ม./วินาที ระดับน้ำเหนือเขื่อน +16.38 ม.รทก.'),[null]);
 });

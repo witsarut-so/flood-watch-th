@@ -7,7 +7,7 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {gunzipSync} from 'node:zlib';
 import {buildNamedIndex,matchNamed,normName} from './named-match.mjs';
 import {normalize} from './model-inputs.mjs';
-import {parseRss,stripTags,relevance,extractPlaces,extractPlacesSocial,extractDepth,extractFacts,extractDamRelease,redact,buildGazetteer,titleKey} from './evidence-text.mjs';
+import {parseRss,stripTags,relevance,extractPlaces,extractPlacesSocial,extractDepth,extractFacts,extractDamRelease,effectiveAt,redact,buildGazetteer,titleKey} from './evidence-text.mjs';
 
 const TW='https://api-v3.thaiwater.net/api/v1/thaiwater30/public/';
 const TRAFFY='https://publicapi.traffy.in.th/share/teamchadchart/search';
@@ -307,7 +307,7 @@ function nearestProvince(g,lat,lng){let best=null,d=Infinity;for(const p of g.pr
 // Timeline of Chao Phraya Dam release reported in the news (one point per item and value/type). Times are
 // publication times, so they lag the actual change by up to a few hours.
 export function damTimeline(items){
- const pts=[];for(const i of items)for(const r of i.damRelease||[])pts.push({at:i.at,m3s:r.m3s,type:r.type,source:i.source,url:i.sourceUrl,phrase:r.phrase});
+ const pts=[];for(const i of items)for(const r of i.damRelease||[])pts.push({at:i.at,m3s:r.m3s,type:r.type,source:i.source,url:i.sourceUrl,phrase:r.phrase,effectiveAt:effectiveAt(i.at,r.when)||undefined});
  pts.sort((a,b)=>a.at.localeCompare(b.at));
  return {site:'เขื่อนเจ้าพระยา (ชัยนาท) · อัตราระบายท้ายเขื่อนตามข่าว',unit:'ลบ.ม./วินาที',points:pts};
 }
