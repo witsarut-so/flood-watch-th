@@ -7,7 +7,7 @@ import {promisify} from 'node:util';
 import {mkdir,readFile,writeFile,readdir,rm,rename} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {modelInputs} from './model-inputs.mjs';
-import {getEvidence,bmaFloodAlert,bmaCanals,traffyDirect,textContext} from './evidence.mjs';
+import {getEvidence,bmaFloodAlert,bmaCanals,traffyDirect,textContext,localAgencies} from './evidence.mjs';
 import {buildForecast} from './forecast.mjs';
 import {gzipSync,gunzipSync} from 'node:zlib';
 import {getWater} from './live-water.mjs';
@@ -47,9 +47,10 @@ async function dispatchWorkflows(env){
 export async function runThaiJob({upload=true}={}){
  const {gaz,idx}=await textContext(),file=root+'data/evidence/thai.json.gz',now=new Date().toISOString();
  let prev={};try{prev=JSON.parse(gunzipSync(await readFile(file)));}catch{}
- const out={fetchedAt:now,bma:prev.bma||null,traffy:prev.traffy||null,canals:prev.canals||null},errors=[],report={};
+ const out={fetchedAt:now,bma:prev.bma||null,traffy:prev.traffy||null,canals:prev.canals||null,local:prev.local||null},errors=[],report={};
  try{const items=await bmaFloodAlert(gaz,idx);if(!items.length)throw Error('no items');out.bma={ok:true,fetchedAt:now,items};report.bma=items.length;}catch(e){report.bma='failed: '+e.message;}
  try{const items=await bmaCanals();if(!items.length)throw Error('no items');out.canals={ok:true,fetchedAt:now,items};report.canals=items.length;}catch(e){report.canals='failed: '+e.message;}
+ try{const items=await localAgencies();out.local={ok:true,fetchedAt:now,items:[...items]};report.local=items.failed.length?`${items.length} (${items.failed.join(' • ')})`:items.length;}catch(e){report.local='failed: '+String(e.message).slice(0,120);}
  try{const items=await traffyDirect(errors,idx);if(!items.length||items[0].stale)throw Error(errors.at(-1)?.error||'no fresh items');out.traffy={ok:true,fetchedAt:now,items};report.traffy=items.length;}catch(e){report.traffy='failed: '+String(e.message).slice(0,120);}
  await mkdir(root+'data/evidence',{recursive:true});await writeFile(file,gzipSync(JSON.stringify(out)));
  if(upload){const token=(await run('gh',['auth','token','-u',RELAY_GH_USER])).stdout.trim();
@@ -64,8 +65,8 @@ export async function runThaiJob({upload=true}={}){
 const LITE_HOURS=6,DROP=['excerpt','depthPhrases','feed','relevance','articleRead','precisionNote'];
 export function liteEvidence(ev){
  const cutoff=Date.now()-LITE_HOURS*3600000;
- const items=ev.items.filter(i=>i.kind!=='citizen'||Date.parse(i.at)>=cutoff).map(i=>{const o={...i};for(const k of DROP)delete o[k];if(o.kind==='news'&&o.places)o.places=o.places.slice(0,5);return o;});
- return {...ev,items,lite:{citizenHours:LITE_HOURS,citizenTotal:ev.items.filter(i=>i.kind==='citizen').length}};
+ const items=ev.items.filter(i=>i.kind!=='citizen'||i.subkind==='local-report'||Date.parse(i.at)>=cutoff).map(i=>{const o={...i};for(const k of DROP)delete o[k];if(o.kind==='news'&&o.places)o.places=o.places.slice(0,5);return o;});
+ return {...ev,items,lite:{citizenHours:LITE_HOURS,citizenTotal:ev.items.filter(i=>i.kind==='citizen'&&i.subkind!=='local-report').length}};
 }
 
 let running=null;

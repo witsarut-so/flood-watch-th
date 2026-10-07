@@ -87,3 +87,4 @@ footer{max-width:1600px;margin:0 auto;padding:0 max(16px,3%) 28px;font-size:11px
 .sw.canalbar{background:linear-gradient(90deg,#e03131 0 40%,#f59f00 40% 70%,#2f9e44 70%);height:5px}
 .sw.pctbar{background:conic-gradient(#e03131 0 33%,#f76707 0 55%,#f5b400 0 75%,#4c9be8 0)}
 .fl-pop{border-collapse:collapse;margin:4px 0;font-size:12px}.fl-pop td,.fl-pop th{padding:1px 6px;text-align:right;white-space:nowrap}.fl-pop td:first-child,.fl-pop th:first-child{text-align:left}.fl-pop th{font-weight:500;color:#6b7f79;font-size:10.5px}
+.ev-local{display:inline-block;background:var(--c);color:#fff;font:600 10.5px 'Noto Sans Thai',sans-serif;padding:2px 6px;border-radius:8px;border:1.5px solid #fff;white-space:nowrap;box-shadow:0 1px 4px #0005;transform:translate(-50%,-50%)}

@@ -333,12 +333,59 @@ export async function getEvidence({wait=false}={}){
  if(cache&&!wait)return {...cache,refreshing:true};
  return job;
 }
+// Local agencies in Pathum Thani / Nonthaburi (no data in ThaiWater beyond a few HII stations). Thai-hosted, so the Thai
+// relay fetches them like the BMA sources:
+//  เทศบาลนครรังสิต cdp.rangsitcity.go.th – flag level at its watch points (a staff gauge read from CCTV by OpenCV or
+//   staff) and flood reports from the public that staff check before they are published (photo, depth class);
+//  เทศบาลนครปากเกร็ด pakkretconnect.com – Chao Phraya level sensor at Pak Kret pier (ม.รทก.) and its flag thresholds.
+const RANGSIT='https://cdp.rangsitcity.go.th/',PAKKRET='https://www.pakkretconnect.com/liffwater/eon',LOCAL_REPORT_H=72;
+const RANGSIT_LEVEL={NORMAL:['normal','ปกติ (ธงเขียว)'],WATCH:['watch','เฝ้าระวัง (ธงเหลือง)'],NEAR_CRITICAL:['warning','เสี่ยงอันตราย (ธงส้ม)'],CRITICAL:['critical','วิกฤต (ธงแดง)']};
+const RANGSIT_DEPTH={ANKLE:[15,'ระดับข้อเท้า (≈10–20 ซม.)'],KNEE:[40,'ระดับเข่า (≈30–50 ซม.)'],WAIST:[85,'ระดับเอว (≈70–100 ซม.)'],IMPASSABLE:[100,'รถเล็กผ่านไม่ได้ (>100 ซม.)']};
+// Watch points sit in the page's Next.js payload: self.__next_f.push([1,"<json string>"]).
+export function parseRangsitWatch(html){
+ const payload=[...html.matchAll(/self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g)].map(m=>{try{return JSON.parse(m[1]);}catch{return '';}}).join('');
+ const out=[];
+ for(const m of payload.matchAll(/\{"id":(\d+),"name":"([^"]*)","description":(?:null|"[^"]*"),"latitude":([\d.]+),"longitude":([\d.]+),"watch":(\{[^{}]*\})/g)){
+  let w;try{w=JSON.parse(m[5].replace(/"\$D/g,'"'));}catch{continue;}const [state,label]=RANGSIT_LEVEL[w.level]||['offline',w.level||'ไม่ทราบ'];
+  const msl=(w.cvReason||'').match(/ผิวน้ำ\s*≈\s*(-?[\d.]+)\s*ม\.รทก/);
+  out.push({id:'local:rangsit:'+m[1],kind:'official',subkind:'local-gauge',source:'เทศบาลนครรังสิต',sourceUrl:RANGSIT,lat:+m[3],lng:+m[4],precision:'point',province:'ปทุมธานี',at:w.updatedAt||null,
+   title:`${w.label||m[2]}: ${label}`,state,levelM:msl?+msl[1]:null,how:w.mode==='AUTO'?`อ่านจากกล้อง CCTV อัตโนมัติ${w.cvLevel?'':' (รอบล่าสุดอ่านไม่ได้: '+(w.cvReason||'')+' — คงระดับเดิม)'}`:'เจ้าหน้าที่กำหนด',detail:w.cvLevel?w.cvReason:null,since:w.levelChangedAt||w.publicNotifiedAt||null});}
+ return out;
+}
+export function rangsitReports(rows,now=Date.now()){
+ return (rows||[]).filter(r=>Number.isFinite(r.latitude)&&Number.isFinite(r.longitude)&&now-Date.parse(r.createdAt)<=LOCAL_REPORT_H*3600000).map(r=>{const [cm,label]=RANGSIT_DEPTH[r.waterLevel]||[null,r.waterLevel];
+  return {id:'rangsit:'+r.code,kind:'citizen',subkind:'local-report',source:'เทศบาลนครรังสิต (รายงานประชาชน ตรวจสอบโดยเจ้าหน้าที่)',sourceUrl:RANGSIT+'#flood-watch',lat:r.latitude,lng:r.longitude,precision:'point',at:r.createdAt,
+   title:redact(`${r.locationName||'จุดน้ำท่วม'}: ${label}${r.description?' • '+r.description:''}`).slice(0,160),address:r.locationName||'',province:'ปทุมธานี',depthCm:cm,depthEstimated:true,photo:/^[A-Z0-9]{6,16}$/.test(r.code)?RANGSIT+'api/flood/image/'+r.code:null};});
+}
+export function parsePakkret(html,thresholds={watch:1.5,critical:2.3}){
+ const text=html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ');
+ const m=text.match(/(\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?)(?:\.\d+)?\s*ระดับน้ำ\s*:?\s*(-?[\d.]+)\s*เมตร/);if(!m)return [];
+ const v=+m[2],state=v>=thresholds.critical?'critical':v>=thresholds.watch?'watch':'normal',label={critical:'วิกฤต (แดง)',watch:'เฝ้าระวัง (เหลือง)',normal:'ปกติ (เขียว)'}[state];
+ // sensor at the Pak Kret pier (หัวถนน), Chao Phraya east bank — position from the pier, the page gives none
+ return [{id:'local:pakkret:pier',kind:'official',subkind:'local-gauge',source:'เทศบาลนครปากเกร็ด',sourceUrl:PAKKRET,lat:13.9122,lng:100.4980,precision:'point',province:'นนทบุรี',at:bkkTime(m[1]),
+  title:`ท่าน้ำปากเกร็ด (แม่น้ำเจ้าพระยา): ${v.toFixed(2)} ม.รทก. • ${label}`,state,levelM:v,how:'เซนเซอร์วัดระดับน้ำของเทศบาล',detail:`เกณฑ์เทศบาล: ปกติไม่เกิน ${thresholds.watch.toFixed(2)} • เฝ้าระวัง ${thresholds.watch.toFixed(2)}–${thresholds.critical.toFixed(2)} • วิกฤตตั้งแต่ ${thresholds.critical.toFixed(2)} ม.รทก.`}];
+}
+export async function localAgencies(){
+ const [page,reports,pk]=await Promise.allSettled([get(RANGSIT,'text'),get(RANGSIT+'api/flood/reports'),get(PAKKRET,'text')]);
+ const items=[...(page.status==='fulfilled'?parseRangsitWatch(page.value):[]),...(reports.status==='fulfilled'?rangsitReports(reports.value):[]),...(pk.status==='fulfilled'?parsePakkret(pk.value):[])];
+ const failed=[['เทศบาลนครรังสิต',page],['เทศบาลนครรังสิต (รายงาน)',reports],['เทศบาลนครปากเกร็ด',pk]].filter(([,r])=>r.status==='rejected').map(([n,r])=>`${n}: ${r.reason.message}`);
+ if(!items.length)throw Error(failed.join(' • ')||'no items');
+ return Object.assign(items,{failed});
+}
+const LOCAL_CACHE=new URL('./data/evidence/local-last-good.json',import.meta.url);
+async function localWithRelay(errors){
+ const relay=await relayPart('local');if(relay&&minutesSince(relay.fetchedAt)<=RELAY_FRESH_MIN)return relayItems(relay,'เครื่องในไทย');
+ try{const items=await localAgencies();for(const f of items.failed)errors.push({source:'local',error:f});await writeFile(LOCAL_CACHE,JSON.stringify({fetchedAt:new Date().toISOString(),items}));return [...items];}
+ catch(e){
+  if(relay){errors.push({source:'local',error:`${e.message} • ใช้ข้อมูลจากเครื่องในไทยเมื่อ ${relay.fetchedAt}`});return relayItems(relay,'เครื่องในไทย');}
+  try{const last=JSON.parse(await readFile(LOCAL_CACHE));errors.push({source:'local',error:`${e.message} • ใช้ข้อมูลที่ดึงสำเร็จล่าสุดเมื่อ ${last.fetchedAt}`});return last.items.map(i=>({...i,stale:true,fetchedAt:last.fetchedAt}));}catch{throw e;}}
+}
 function refresh(){
  pending=(async()=>{
   gaz??=buildGazetteer(JSON.parse(await readFile(new URL('./data/gazetteer/th-admin.json',import.meta.url))).places);
   const errors=[],fetchedAt=new Date().toISOString(),idx=await namedIndex();
   if(!idx)errors.push({source:'named',error:'ยังไม่มีฐานชื่อถนน/หมู่บ้าน (รัน model/build_static.py)'});
-  const tasks={bmaAlert:()=>bmaWithFallback(gaz,idx,errors),traffy:()=>traffyWithRelay(errors,idx),roadSensors,heavyRain,dams,canalFlow,canals:()=>canalsWithRelay(errors),waterGates,social:()=>bluesky(gaz,idx,errors),mediaFeed:()=>mediaFeed(gaz,idx),news:()=>news(gaz,errors,idx)};
+  const tasks={bmaAlert:()=>bmaWithFallback(gaz,idx,errors),traffy:()=>traffyWithRelay(errors,idx),roadSensors,heavyRain,dams,canalFlow,canals:()=>canalsWithRelay(errors),local:()=>localWithRelay(errors),waterGates,social:()=>bluesky(gaz,idx,errors),mediaFeed:()=>mediaFeed(gaz,idx),news:()=>news(gaz,errors,idx)};
   const results=await Promise.allSettled(Object.values(tasks).map(f=>f()));const sources={};const items=[];
   Object.keys(tasks).forEach((name,i)=>{const r=results[i];if(r.status==='fulfilled'){items.push(...r.value);sources[name]={ok:true,count:r.value.length};}else{sources[name]={ok:false,count:0,error:r.reason.message};errors.push({source:name,error:r.reason.message});}});
   const dropped=dedupeReports(items);if(dropped)sources.traffy.duplicates=dropped;
