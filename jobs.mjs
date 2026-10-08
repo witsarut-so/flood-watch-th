@@ -23,6 +23,7 @@ export async function runEvidenceJob(){
  const ev=await getEvidence({wait:true});const {refreshing,...clean}=ev;
  await writeAtomic(LIVE+'evidence.json',JSON.stringify(clean));
  await writeAtomic(LIVE+'evidence-lite.json',JSON.stringify(liteEvidence(clean)));
+ await writeAtomic(LIVE+'now.json',JSON.stringify(nowLayers(clean)));
  try{const w=await getWater();await writeAtomic(LIVE+'waterlevels.json',JSON.stringify(w));}catch(e){console.error('[waterlevels]',e.message);}
  try{await writeAtomic(LIVE+'forecast.json',JSON.stringify(await buildForecast({evidence:clean})));}catch(e){console.error('[forecast]',e.message);}
  return {fetchedAt:ev.fetchedAt,items:ev.items.length,errors:ev.errors.map(e=>e.source)};
@@ -60,6 +61,15 @@ export async function runThaiJob({upload=true}={}){
  return {fetchedAt:now,...report};
 }
 
+// What the map shows for "now": Traffy Fondue reports (24 h), the hourly rain gauges and the municipal gauges —
+// a few hundred KB instead of the full evidence file.
+export function nowLayers(ev){
+ const pick=(i,keys)=>Object.fromEntries(keys.filter(k=>i[k]!=null&&i[k]!=='').map(k=>[k,i[k]]));
+ return {fetchedAt:ev.fetchedAt,windowHours:ev.windowHours?.citizen??24,
+  traffy:ev.items.filter(i=>i.kind==='citizen'&&!i.subkind&&Number.isFinite(i.lat)).map(i=>pick(i,['id','lat','lng','at','title','address','depthCm','depthEstimated','photo','status','stale','via'])),
+  gauges:ev.items.filter(i=>i.subkind==='local-gauge').map(i=>pick(i,['id','lat','lng','at','title','source','sourceUrl','state','levelM','how','detail','province','stale'])),
+  rainRate:ev.rainRate,sources:{traffy:ev.sources?.traffy,local:ev.sources?.local,rainRate:ev.sources?.rainRate}};
+}
 // First-load version for phones: citizen reports from the last LITE_HOURS only (the default filter), and fields the page
 // never shows removed. The page fetches the full evidence.json only when a longer report window is chosen.
 const LITE_HOURS=6,DROP=['excerpt','depthPhrases','feed','relevance','articleRead','precisionNote'];

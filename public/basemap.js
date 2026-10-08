@@ -5,7 +5,7 @@ const basemapStyle={
  area:{fillColor:'#a5d8ff'},river:{color:'#1c7ed6',fillColor:'#74c0fc'},canal:{color:'#0c8599'},drain:{color:'#3bc9db'},stream:{color:'#4dabf7'},
  major:{color:'#f76707'},secondary:{color:'#f59f00'},minor:{color:'#e0b25c'},
 };
-const basemapFilter={river:'f-river',stream:'f-river',canal:'f-canalway',drain:'f-drain',area:'f-waterarea',major:'f-road-major',secondary:'f-road-secondary',minor:'f-road-minor'};
+const basemapFilter={river:'f-riverline',stream:'f-riverline',canal:'f-canalway',drain:'f-drain',area:'f-waterarea',major:'f-road-major',secondary:'f-road-secondary',minor:'f-road-minor'};
 const basemap={national:null,main:new Map(),minor:new Map(),loading:new Set(),layers:{},renderers:{}};
 if(map)for(const name of ['waterAreas','waterLines','roadsBase']){basemap.renderers[name]=L.canvas({pane:name,padding:.2});basemap.layers[name]=L.layerGroup().addTo(map);}
 function decodeRows(rows,withClass=true){return rows.map(r=>{const off=withClass?1:0;let lat=r[off],lng=r[off+1];const pts=[[lat/1e5,lng/1e5]];let s=lat,n=lat,w=lng,e=lng;for(let i=off+2;i<r.length;i+=2){lat+=r[i];lng+=r[i+1];pts.push([lat/1e5,lng/1e5]);if(lat<s)s=lat;if(lat>n)n=lat;if(lng<w)w=lng;if(lng>e)e=lng;}return {cls:withClass?r[0]:'minor',pts,box:[s/1e5,w/1e5,n/1e5,e/1e5]};});}

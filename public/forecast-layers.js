@@ -1,5 +1,5 @@
-// River stations coloured by level as % of bank (now or forecast +12/24/36 h) and Bangkok canals coloured by BMA status,
-// from /live/forecast.json. Shared by the main map (filters f-gauges, f-canal) and the forecast page.
+// River stations coloured by level as % of bank (now or forecast +12/24/36 h) and Bangkok canals coloured by BMA status
+// (now, or the gauge's trend carried forward), from /live/forecast.json. Used by main.js.
 const FL=(()=>{
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const time=t=>t?new Date(t).toLocaleString('th-TH',{timeZone:'Asia/Bangkok',dateStyle:'short',timeStyle:'short'}):'–';
@@ -34,31 +34,20 @@ const FL=(()=>{
  }
  function canalPopup(s){
   const tr=s.trendMPerH==null?'':s.trendMPerH>.01?` <b style="color:#c92a2a">▲ ${sign(s.trendMPerH)} ม./ชม.</b>`:s.trendMPerH<-.01?` <b style="color:#2b8a3e">▼ ${sign(s.trendMPerH)} ม./ชม.</b>`:' ทรงตัว';
+  const ahead=s.forecast?`<table class="fl-pop"><tr><th></th><th>ม.รทก.</th><th>สถานะ</th></tr><tr><td>ตอนนี้</td><td>${f2(s.levelM)}</td><td>${esc(CANAL[s.state][1])}</td></tr>${[12,24,36].map(h=>{const v=s.forecast[h];return v?`<tr><td>+${h} ชม.</td><td>${f2(v.levelM)}</td><td style="color:${CANAL[v.state][0]}">${esc(CANAL[v.state][1].split(' ')[0])}</td></tr>`:'';}).join('')}</table><small>+12/24/36 ชม. = แนวโน้ม ~3 ชม. ล่าสุดต่อไปแบบหน่วงลง ไม่รวมการสูบน้ำหรือฝนที่จะตก</small>`:'';
   return `<b>${esc(s.name)}</b><br><small>${esc(s.canal)} • เขต${esc(s.district)} • ${esc(s.code)}</small><br>สถานะ กทม.: <b style="color:${CANAL[s.state][0]}">${esc(s.status)}</b>
    <br>ระดับน้ำ ${f2(s.levelM)} ม.รทก.${tr}${s.criticalM!=null?`<br>ระดับเตือน ${f2(s.warningM)} • ระดับควบคุม ${f2(s.criticalM)} • ตลิ่ง ${f2(s.bankM)} ม.รทก.<br>${s.overM>0?`<b>เกินระดับควบคุม ${f2(s.overM)} ม.</b>`:`ต่ำกว่าระดับควบคุม ${f2(-s.overM)} ม.`}${s.bankM!=null&&s.levelM!=null?` • ห่างตลิ่ง ${f2(s.bankM-s.levelM)} ม.`:''}`:''}
-   <br><small>สำนักการระบายน้ำ กทม. (now.bangkok.go.th) • ${esc(time(s.at))}</small>`;
+   ${ahead}<br><small>สำนักการระบายน้ำ กทม. (now.bangkok.go.th) • ${esc(time(s.at))}</small>`;
  }
- function canalLayer({alertOnly=false,onClick}={}){
+ const canalState=(s,h)=>h&&s.forecast?.[h]?s.forecast[h].state:s.state;
+ function canalLayer({horizon=0,alertOnly=false,onClick}={}){
   const g=L.layerGroup(),c=data?.canals;if(!c)return g;const rank={offline:0,normal:1,warning:2,critical:3};
-  for(const s of [...c.stations].sort((a,b)=>rank[a.state]-rank[b.state])){if(alertOnly&&!(s.state==='critical'||s.state==='warning'))continue;const col=CANAL[s.state][0];
+  for(const s0 of [...c.stations].sort((a,b)=>rank[canalState(a,horizon)]-rank[canalState(b,horizon)])){const s={...s0,state:canalState(s0,horizon),status:horizon?`${CANAL[canalState(s0,horizon)][1]} (แนวโน้ม +${horizon} ชม.) • ตอนนี้: ${s0.status}`:s0.status};
+   if(alertOnly&&!(s.state==='critical'||s.state==='warning'))continue;const col=CANAL[s.state][0];
    for(const l of s.line||[]){L.polyline(l,{pane:'mentions',color:'#fff',weight:s.state==='critical'?9:7,opacity:.9,interactive:false}).addTo(g);L.polyline(l,{pane:'mentions',color:col,weight:s.state==='critical'?5.5:4,opacity:s.state==='offline'?.5:.95}).addTo(g);}
    const m=L.circleMarker([s.lat,s.lng],{pane:'evidence',radius:s.state==='critical'?6.5:s.state==='warning'?5.5:4,color:'#fff',weight:1.6,fillColor:col,fillOpacity:s.state==='offline'?.6:1});
-   m.bindPopup(()=>canalPopup(s),{maxWidth:320});m.bindTooltip(`${s.name}: ${CANAL[s.state][1]}`,{direction:'top'});if(onClick)m.on('click',()=>onClick(s));m.addTo(g);}
+   m.bindPopup(()=>canalPopup(s0),{maxWidth:320});m.bindTooltip(`${s.name}: ${CANAL[s.state][1]}`,{direction:'top'});if(onClick)m.on('click',()=>onClick(s));m.addTo(g);}
   return g;
  }
- return {load,get data(){return data},PCT,CANAL,METHOD,pctColor,pctLabel,riverLayer,canalLayer,stationPopup,canalPopup,esc,time,f2,sign};
+ return {load,get data(){return data},PCT,CANAL,METHOD,pctColor,pctLabel,riverLayer,canalLayer,canalState,stationPopup,canalPopup,esc,time,f2,sign};
 })();
-
-// Main map glue: the "river level" and "Bangkok canals" filters draw from forecast.json.
-if(typeof map!=='undefined'&&map&&document.getElementById('f-gauges')){
- let river=null,canals=null;
- const paint=async()=>{
-  try{await FL.load();}catch{document.getElementById('c-gauges').textContent='!';return;}
-  river?.remove();canals?.remove();river=canals=null;
-  if($('f-gauges').checked)river=FL.riverLayer(0).addTo(map);
-  if($('f-canal').checked)canals=FL.canalLayer().addTo(map);
-  const d=FL.data;$('c-gauges').textContent=d.stations.filter(s=>s.pctNow>=100).length+' ล้นตลิ่ง';
-  if(d.canals)$('c-canal').textContent=d.canals.counts.critical+' วิกฤต';
- };
- onFilter(['f-gauges','f-canal'],paint);paint();setInterval(()=>FL.load(true).then(paint).catch(()=>{}),600000);
-}

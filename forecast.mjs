@@ -7,7 +7,7 @@
 //  regress – level = a + b·(upstream flow, lagged) [+ tide harmonics where the river is tidal], fitted on the last 10 days.
 //  trend   – everything else: slope of the last 6 h, damped (e-folding 12 h); tidal stations keep their tide harmonics.
 // Every station is also hindcast from 36 h ago (upstream flows as measured) and its mean absolute error is published.
-import {readFile} from 'node:fs/promises';
+import {readFile,writeFile} from 'node:fs/promises';
 import {gunzipSync} from 'node:zlib';
 
 const TW='https://api-v3.thaiwater.net/api/v1/thaiwater30/public/';
@@ -217,23 +217,76 @@ async function dams(){
  const d=await get(TW+'thaiwater_main');const rows=d.dam?.data?.data||[];const m3s=v=>v==null?null:round(Number(v)*1e6/86400,0);
  return rows.map(r=>({id:r.dam?.id,name:'เขื่อน'+(r.dam?.dam_name?.th||''),lat:num(r.dam?.dam_lat),lng:num(r.dam?.dam_long),date:r.dam_date,storagePct:num(r.dam_storage_percent),inflowM3s:m3s(r.dam_inflow),releaseM3s:m3s(r.dam_released),spillM3s:m3s(r.dam_spilled),inflowMcm:num(r.dam_inflow),releaseMcm:num(r.dam_released)})).filter(x=>x.lat!==null).sort((a,b)=>(b.storagePct??0)-(a.storagePct??0));
 }
-// Rain outlook (Open-Meteo, blend of global weather models): accumulated mm in each horizon window at a few places.
-const RAIN_POINTS=[['กรุงเทพฯ ฝั่งตะวันออก',13.78,100.72],['กรุงเทพฯ ชั้นใน',13.75,100.52],['กรุงเทพฯ ฝั่งธนบุรี',13.72,100.43],['นนทบุรี',13.86,100.5],['ปทุมธานี',14.02,100.6],['สมุทรปราการ',13.6,100.6],['พระนครศรีอยุธยา',14.35,100.57],['อ่างทอง',14.59,100.45],['ลพบุรี',14.8,100.65],['สระบุรี',14.53,100.91],['นครนายก',14.2,101.21],['ปราจีนบุรี',14.05,101.37],['ฉะเชิงเทรา',13.69,101.07],['สุพรรณบุรี',14.47,100.12],['นครปฐม',13.82,100.06],['กาญจนบุรี',14.02,99.53],['ชัยนาท',15.19,100.12],['นครสวรรค์',15.7,100.12]];
-async function rainOutlook(){
+// Rain and weather outlook at places across the basin: mm accumulated in each horizon window, chance, condition.
+//  - Open-Meteo, four global models (ECMWF IFS, DWD ICON, NOAA GFS, JMA): their mean, and how many of them expect real
+//    rain (>= RAIN_WET_MM in the window) — the spread between models is the honest uncertainty;
+//  - Google Weather API when GOOGLE_WEATHER_API_KEY is set: the main figure (Google's own short-range models), refreshed
+//    every GOOGLE_EVERY_H hours (cached in data/evidence, which the workflows carry between runs) to stay in quota.
+const RAIN_POINTS=[['กทม. ชั้นใน',13.75,100.52],['กทม. ฝั่งธนบุรี',13.72,100.43],['กทม. ตะวันออก (ลาดกระบัง)',13.75,100.76],['กทม. หนองจอก/มีนบุรี',13.84,100.84],['กทม. เหนือ (ดอนเมือง/สายไหม)',13.91,100.62],['กทม. ใต้ (บางขุนเทียน)',13.6,100.44],
+ ['นนทบุรี (เมือง)',13.86,100.5],['ปากเกร็ด',13.91,100.5],['บางบัวทอง/บางใหญ่',13.89,100.4],['ไทรน้อย',14.0,100.33],['ปทุมธานี (เมือง)',14.02,100.53],['รังสิต/ธัญบุรี',14.0,100.67],['ลำลูกกา',13.96,100.77],['หนองเสือ',14.13,100.82],
+ ['สมุทรปราการ',13.6,100.6],['บางพลี',13.6,100.72],['พระนครศรีอยุธยา',14.35,100.57],['บางไทร',14.2,100.48],['อ่างทอง',14.59,100.45],['สิงห์บุรี',14.89,100.4],['ลพบุรี',14.8,100.65],['สระบุรี',14.53,100.91],['นครนายก',14.2,101.21],
+ ['ปราจีนบุรี',14.05,101.37],['ฉะเชิงเทรา',13.69,101.07],['สุพรรณบุรี',14.47,100.12],['นครปฐม',13.82,100.06],['กาญจนบุรี',14.02,99.53],['ชัยนาท',15.19,100.12],['นครสวรรค์',15.7,100.12]];
+const OM_MODELS=[['ecmwf_ifs025','ECMWF'],['icon_seamless','ICON'],['gfs_seamless','GFS'],['jma_seamless','JMA']],RAIN_WET_MM=5;
+// condition from the model mean, in the Thai Meteorological Department's rain classes (mm/24 h applied to the 12 h window,
+// so on the cautious side); thunder when at least two models forecast it (WMO weather code >= 95)
+const rainClass=mm=>mm==null?null:mm<.5?'ไม่มีฝน':mm<=10?'ฝนเล็กน้อย':mm<=35?'ฝนปานกลาง':mm<=90?'ฝนหนัก':'ฝนหนักมาก';
+const GOOGLE_KEY=process.env.GOOGLE_WEATHER_API_KEY||'',GOOGLE_EVERY_H=Number(process.env.GOOGLE_WEATHER_EVERY_H)||3,GOOGLE_CACHE=new URL('./data/evidence/google-weather.json',import.meta.url);
+const hourKey=t=>Math.floor(t/3600000),mean=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:null;
+async function openMeteo(){
  const lat=RAIN_POINTS.map(p=>p[1]).join(','),lng=RAIN_POINTS.map(p=>p[2]).join(',');
- const d=await get(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&hourly=precipitation,precipitation_probability&past_hours=6&forecast_hours=${AHEAD+1}&timezone=Asia%2FBangkok`);
+ const d=await get(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&hourly=precipitation,precipitation_probability,weather_code&models=${OM_MODELS.map(m=>m[0]).join(',')}&past_hours=6&forecast_hours=${AHEAD+1}&timezone=Asia%2FBangkok`,45000);
  // hourly totals ending at each timestamp (Asia/Bangkok); the 6 past hours bridge the gap to the flood model's last rain hour
- return (Array.isArray(d)?d:[d]).map((r,k)=>{const all=r.hourly.precipitation,times=r.hourly.time.map(t=>Date.parse(t+':00+07:00')),i0=Math.max(0,times.findIndex(t=>t>=Math.floor(Date.now()/3600000)*3600000));
-  const p=all.slice(i0),pp=(r.hourly.precipitation_probability||[]).slice(i0);
-  return {name:RAIN_POINTS[k][0],lat:RAIN_POINTS[k][1],lng:RAIN_POINTS[k][2],windows:Object.fromEntries(HORIZONS.map(h=>[h,{mm:round(p.slice(h-12,h).reduce((s,v)=>s+(v||0),0),1),probPct:Math.max(0,...pp.slice(h-12,h).filter(v=>v!=null))}])),
-   hourly:{startAt:new Date(times[0]).toISOString(),mm:all.map(v=>v==null?null:round(v,1))}};});
+ return (Array.isArray(d)?d:[d]).map(r=>{const models={};
+  for(const [id,label] of OM_MODELS){const mm=r.hourly['precipitation_'+id];if(!mm||mm.every(v=>v==null))continue;models[label]={mm,prob:r.hourly['precipitation_probability_'+id]||null,code:r.hourly['weather_code_'+id]||null};}
+  return {times:r.hourly.time.map(t=>Date.parse(t+':00+07:00')),models};});
+}
+async function googleHours(lat,lng){
+ const out=[];let token='';
+ for(let page=0;page<3&&out.length<AHEAD+1;page++){
+  const d=await get(`https://weather.googleapis.com/v1/forecast/hours:lookup?key=${encodeURIComponent(GOOGLE_KEY)}&location.latitude=${lat}&location.longitude=${lng}&hours=${AHEAD+1}&pageSize=24&languageCode=th${token?'&pageToken='+encodeURIComponent(token):''}`);
+  for(const h of d.forecastHours||[])out.push({t:Date.parse(h.interval?.startTime),mm:num(h.precipitation?.qpf?.quantity),prob:num(h.precipitation?.probability?.percent),thunder:num(h.thunderstormProbability),text:h.weatherCondition?.description?.text||null});
+  token=d.nextPageToken;if(!token)break;}
+ return out;
+}
+async function googleWeather(){
+ if(!GOOGLE_KEY)return null;
+ let cache=null;try{cache=JSON.parse(await readFile(GOOGLE_CACHE,'utf8'));}catch{}
+ if(cache&&Date.now()-Date.parse(cache.fetchedAt)<GOOGLE_EVERY_H*3600000&&cache.points?.length===RAIN_POINTS.length)return cache;
+ let firstErr=null;const points=await mapLimit(RAIN_POINTS,4,async p=>{try{return await googleHours(p[1],p[2]);}catch(e){firstErr??=e;throw e;}});
+ if(!points.some(Boolean))throw Error('Google Weather: '+(firstErr?.message||'no data').replace(GOOGLE_KEY,'***'));
+ const out={fetchedAt:new Date().toISOString(),points};try{await writeFile(GOOGLE_CACHE,JSON.stringify(out));}catch{}return out;
+}
+// One record per place: Google where it has the hour, else the Open-Meteo model mean.
+export function combineRain(om,gw,now=Date.now(),points=RAIN_POINTS){
+ const h0=hourKey(now);
+ return points.map(([name,lat,lng],k)=>{const o=om?.[k],g=gw?.points?.[k]||null,omAt=new Map(),gAt=new Map();
+  if(o)o.times.forEach((t,i)=>{const ms=Object.entries(o.models);omAt.set(hourKey(t)-1,{  // a total ending at t fell in the hour before t
+   mm:mean(ms.map(([,m])=>m.mm[i]).filter(v=>v!=null)),per:Object.fromEntries(ms.map(([l,m])=>[l,m.mm[i]])),prob:mean(ms.map(([,m])=>m.prob?.[i]).filter(v=>v!=null)),thunder:ms.filter(([,m])=>m.code?.[i]>=95).length});});
+  for(const x of g||[])if(Number.isFinite(x.t))gAt.set(hourKey(x.t),x);
+  const windows=Object.fromEntries(HORIZONS.map(h=>{let mm=0,prob=0,thunder=null,storm=0,top=null,n=0;const per={};
+   for(let q=h0+h-12;q<h0+h;q++){const a=omAt.get(q),b=gAt.get(q),v=b?.mm??a?.mm;if(v!=null){mm+=v;n++;}
+    for(const [l,x] of Object.entries(a?.per||{}))if(x!=null)per[l]=(per[l]||0)+x;
+    prob=Math.max(prob,b?.prob??a?.prob??0);if(b?.thunder!=null)thunder=Math.max(thunder??0,b.thunder);if(a)storm=Math.max(storm,a.thunder);if(b?.text&&(!top||(b.mm??0)>(top.mm??0)))top=b;}
+   const models=Object.fromEntries(Object.entries(per).map(([l,v])=>[l,round(v,1)]));
+   return [h,{mm:n?round(mm,1):null,probPct:Math.round(prob),thunderPct:thunder,condition:top?.text||(n?rainClass(mm)+(storm>=2&&mm>=.5?' ฟ้าคะนอง':''):null),models,wetModels:Object.values(models).filter(v=>v>=RAIN_WET_MM).length,nModels:Object.keys(models).length}];}));
+  const first=Math.min(...[...omAt.keys(),...gAt.keys()].filter(q=>q>=h0-6)),hours=[];
+  for(let q=Number.isFinite(first)?first:h0;q<=h0+AHEAD;q++){const v=gAt.get(q)?.mm??omAt.get(q)?.mm;hours.push(v==null?null:round(v,1));}
+  return {name,lat,lng,windows,hourly:{startAt:new Date(((Number.isFinite(first)?first:h0)+1)*3600000).toISOString(),mm:hours}};});
+}
+async function rainOutlook(errors){
+ const [om,gw]=await Promise.allSettled([openMeteo(),googleWeather()]);
+ if(gw.status==='rejected')errors.push({source:'googleWeather',error:gw.reason.message});
+ const omv=om.status==='fulfilled'?om.value:null,gwv=gw.status==='fulfilled'?gw.value:null;
+ if(om.status==='rejected')errors.push({source:'openMeteo',error:om.reason.message});
+ if(!omv&&!gwv)throw Error('rain forecast unavailable');
+ return {points:combineRain(omv,gwv),source:{primary:gwv?'Google Weather':'Open-Meteo',models:omv?Object.keys(omv[0]?.models||{}):[],googleFetchedAt:gwv?.fetchedAt||null,googleConfigured:!!GOOGLE_KEY,wetMm:RAIN_WET_MM}};
 }
 
 // --- job ----------------------------------------------------------------------------------------------------------
 export async function buildForecast({evidence}={}){
  const now=Date.now(),g=grid(now),errors=[];
  const manual=JSON.parse(await readFile(PLANS,'utf8'));
- const [stR,damR,rainR]=await Promise.allSettled([stations(g),dams(),rainOutlook()]);
+ const [stR,damR,rainR]=await Promise.allSettled([stations(g),dams(),rainOutlook(errors)]);
  if(stR.status==='rejected')throw Error('ThaiWater water levels: '+stR.reason.message);
  const sts=stR.value;if(damR.status==='rejected')errors.push({source:'dams',error:damR.reason.message});if(rainR.status==='rejected')errors.push({source:'rain',error:rainR.reason.message});
  const gauges={};for(const d of manual.dams){const s=d.station&&sts.find(x=>x.code===d.station),q=s?.q?.slice(0,g.NOW+1).filter(v=>v!==null);if(q?.length)gauges[d.station]={now:q.at(-1),max10d:Math.max(...q)};}
@@ -259,8 +312,8 @@ export async function buildForecast({evidence}={}){
    hindcastErrorM:err,path});}
  const risk=Object.fromEntries(HORIZONS.map(h=>[h,out.filter(s=>s.forecast[h]?.pct>=100).map(s=>({code:s.code,name:s.name,province:s.province,amphoe:s.amphoe,tambon:s.tambon,pct:s.forecast[h].pct,riseM:round(s.forecast[h].level-s.levelNow),newly:s.pctNow<100})).sort((a,b)=>b.pct-a.pct)]));
  return {issuedAt:new Date(now).toISOString(),horizons:HORIZONS,plans,stations:out.sort((a,b)=>(b.forecast[36]?.pct??0)-(a.forecast[36]?.pct??0)),risk,
-  dams:damR.status==='fulfilled'?damR.value:[],rain:rainR.status==='fulfilled'?rainR.value:[],canals:await withCanalLines(canalSummary(evidence)),errors,
-  modelDrivers:modelDrivers(g,byCode,base,high,rainR.status==='fulfilled'?rainR.value:[]),
+  dams:damR.status==='fulfilled'?damR.value:[],rain:rainR.status==='fulfilled'?rainR.value.points:[],rainSource:rainR.status==='fulfilled'?rainR.value.source:null,canals:await withCanalLines(canalSummary(evidence)),errors,
+  modelDrivers:modelDrivers(g,byCode,base,high,rainR.status==='fulfilled'?rainR.value.points:[]),
   method:{stations:out.length,note:'ระดับสูงสุดในแต่ละช่วง 12 ชม. • flow = ส่งต่ออัตราการไหลจากต้นน้ำตามเวลาเดินทาง • regress = ระดับน้ำเทียบกับอัตราการไหลต้นน้ำย้อนหลัง 10 วัน (+น้ำขึ้นน้ำลง) • trend = แนวโน้ม 6 ชม. ล่าสุด หน่วงลง • ค่าคลาดเคลื่อนย้อนหลัง = พยากรณ์จาก 36 ชม. ก่อน เทียบค่าที่วัดได้จริง (ใช้น้ำต้นทางที่วัดจริง)'}};
 }
 
@@ -275,15 +328,28 @@ function modelDrivers(g,byCode,base,high,rain){
 }
 
 // Bangkok canals from the evidence feed (BMA): per station, plus per canal the worst station.
+// +12/24/36 h: the BMA publishes no canal forecast, so each gauge's ~3 h trend is carried forward, damped (e-folding
+// CANAL_TAU_H) and capped at CANAL_CAP_M, then graded against the gauge's own warning/control levels — a trend, not a
+// forecast of pumping or rain (labelled so on the map).
+const CANAL_TAU_H=12,CANAL_CAP_M=.5;
+export function canalAhead(s){
+ if(s.offline||s.levelM==null)return null;const tr=s.trendMPerH??0;
+ return Object.fromEntries(HORIZONS.map(h=>{const lv=s.levelM+Math.max(-CANAL_CAP_M,Math.min(CANAL_CAP_M,tr*CANAL_TAU_H*(1-Math.exp(-h/CANAL_TAU_H))));
+  // the BMA's own status stands unless the level moves and the thresholds reproduce that status today
+  const grade=v=>v>=s.criticalM?'critical':v>=s.warningM?'warning':'normal',ok=s.criticalM!=null&&s.warningM!=null&&grade(s.levelM)===s.state;
+  const state=ok&&Math.abs(lv-s.levelM)>=.02?grade(lv):s.state;
+  return [h,{levelM:round(lv),state,overM:s.criticalM!=null?round(lv-s.criticalM):null}];}));
+}
 export function canalSummary(ev){
  const items=(ev?.items||[]).filter(i=>i.subkind==='bma-canal');if(!items.length)return null;
- const st=items.map(i=>({code:i.code,name:i.title.split(':')[0],canal:i.canal,district:i.district,lat:i.lat,lng:i.lng,at:i.at,state:i.state,status:i.status,levelM:i.levelM,warningM:i.warningM,criticalM:i.criticalM,bankM:i.bankM,overM:i.overM,trendMPerH:i.trendMPerH,offline:i.offline}));
+ const st=items.map(i=>({code:i.code,name:i.title.split(':')[0],canal:i.canal,district:i.district,lat:i.lat,lng:i.lng,at:i.at,state:i.state,status:i.status,levelM:i.levelM,warningM:i.warningM,criticalM:i.criticalM,bankM:i.bankM,overM:i.overM,trendMPerH:i.trendMPerH,offline:i.offline})).map(s=>({...s,forecast:canalAhead(s)}));
  const rank={critical:3,warning:2,normal:1,offline:0},by=new Map();
  for(const s of st){if(!by.has(s.canal))by.set(s.canal,[]);by.get(s.canal).push(s);}
  const canals=[...by].map(([canal,list])=>{const live=list.filter(s=>!s.offline),worst=live.sort((a,b)=>rank[b.state]-rank[a.state]||(b.overM??-9)-(a.overM??-9))[0];
   return {canal,state:worst?.state||'offline',stations:list.length,critical:live.filter(s=>s.state==='critical').length,warning:live.filter(s=>s.state==='warning').length,maxOverM:worst?.overM??null,districts:[...new Set(list.map(s=>s.district))],trend:(t=>t.length?round(t.reduce((a,v)=>a+v,0)/t.length,3):null)(live.map(s=>s.trendMPerH).filter(v=>v!=null))};})
   .sort((a,b)=>rank[b.state]-rank[a.state]||b.critical-a.critical||(b.maxOverM??-9)-(a.maxOverM??-9));
- return {fetchedAt:items[0].fetchedAt||items[0].at,source:items[0].source,counts:Object.fromEntries(['critical','warning','normal','offline'].map(k=>[k,st.filter(s=>s.state===k).length])),canals,stations:st};
+ const count=f=>Object.fromEntries(['critical','warning','normal','offline'].map(k=>[k,st.filter(s=>f(s)===k).length]));
+ return {fetchedAt:items[0].fetchedAt||items[0].at,source:items[0].source,counts:count(s=>s.state),countsAhead:Object.fromEntries(HORIZONS.map(h=>[h,count(s=>s.forecast?.[h]?.state??s.state)])),canals,stations:st};
 }
 
 // The stretch of each canal around its gauge (OSM waterway with the same name, points within CANAL_REACH_KM), so the

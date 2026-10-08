@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {routeFlow,trend,canalSummary,newsSteps,autoPlans} from '../forecast.mjs';
+import {routeFlow,trend,canalSummary,newsSteps,autoPlans,combineRain,canalAhead} from '../forecast.mjs';
 
 test('a branch receives only its share of the upstream change, after the travel time', () => {
  const up=[1000,1000,1000,1000,1300,1300,1300,1300,1300,1300],q=[500,500,500,500,500,null,null,null,null,null];
@@ -56,4 +56,23 @@ test('auto plans: measured dam release and agreed news add steps, a stale high s
  const ev2={damRelease:{points:[pt('2026-10-08T01:00Z',2400,'A'),pt('2026-10-08T02:00Z',2400,'B'),{...pt('2026-10-08T03:00Z',2350,'C'),effectiveAt:'2026-10-08T16:00:00.000Z'},{...pt('2026-10-08T04:00Z',2350,'D'),effectiveAt:'2026-10-08T16:00:00.000Z'}]},items:[]};
  const f=autoPlans(plans,{evidence:ev2,now});
  assert.deepEqual(f.dams[0].schedule.map(s=>[s.from,s.m3s]),[['2026-10-07T13:00:00+07:00',2400],['2026-10-08T16:00:00.000Z',2350]]);
+});
+
+test('rain: model mean, models that agree, Google first where it has the hour', () => {
+ const now=Date.parse('2026-10-08T05:00:00Z'),times=[],mk=v=>Array.from({length:40},()=>v);
+ for(let i=0;i<40;i++)times.push(now-5*3600000+i*3600000);  // totals ending at each hour
+ const om=[{times,models:{ECMWF:{mm:mk(1),prob:mk(50),code:mk(95)},GFS:{mm:mk(0),prob:mk(10),code:mk(3)}}}];
+ const [r]=combineRain(om,null,now,[['x',13.7,100.5]]);
+ assert.equal(r.windows[12].mm,6);assert.deepEqual(r.windows[12].models,{ECMWF:12,GFS:0});assert.equal(r.windows[12].wetModels,1);
+ assert.equal(r.windows[12].condition,'ฝนเล็กน้อย');  // one model with thunder is not enough
+ const gw={points:[Array.from({length:37},(_,i)=>({t:now+i*3600000,mm:3,prob:90,thunder:40,text:'ฝนฟ้าคะนอง'}))]};
+ const [g]=combineRain(om,gw,now,[['x',13.7,100.5]]);
+ assert.equal(g.windows[12].mm,36);assert.equal(g.windows[12].condition,'ฝนฟ้าคะนอง');assert.equal(g.windows[12].thunderPct,40);
+});
+
+test('canal ahead: trend carried forward, damped and capped; BMA status kept when thresholds disagree', () => {
+ const s={levelM:.3,trendMPerH:.05,warningM:.35,criticalM:.5,state:'normal'};
+ const f=canalAhead(s);assert.ok(f[12].levelM>.3&&f[36].levelM<=.8+1e-9);assert.equal(f[36].state,'critical');
+ assert.equal(canalAhead({...s,state:'critical'})[12].state,'critical');  // thresholds say normal now: BMA status stands
+ assert.equal(canalAhead({...s,offline:true}),null);
 });
